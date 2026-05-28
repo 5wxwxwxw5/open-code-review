@@ -289,6 +289,10 @@ func NewOpenAIClient(cfg ClientConfig) *OpenAIClient {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
+	if !strings.HasSuffix(baseURL, "/chat/completions") {
+		cfg.URL = baseURL + "/chat/completions"
+	}
 	return &OpenAIClient{
 		cfg: cfg,
 		client: &http.Client{
