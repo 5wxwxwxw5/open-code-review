@@ -36,6 +36,9 @@ func runReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load default template: %w", err)
 	}
+	if opts.maxTools > tpl.MaxToolRequestTimes {
+		tpl.MaxToolRequestTimes = opts.maxTools
+	}
 	if err := tpl.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}

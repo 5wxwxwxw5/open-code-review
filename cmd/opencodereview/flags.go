@@ -105,6 +105,7 @@ type reviewOptions struct {
 	background     string // --background: optional requirement context
 	concurrency    int
 	perFileTimeout int
+	maxTools       int
 	preview        bool
 	showHelp       bool
 }
@@ -125,6 +126,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "concurrent task timeout in minutes")
 	a.StringVar(&opts.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
 	a.StringVarP(&opts.background, "background", "b", "", "optional requirement/business context for the review")
+	a.IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per file; only takes effect when greater than template default")
 	a.BoolVarP(&opts.preview, "preview", "p", false, "preview which files will be reviewed without running the LLM")
 
 	if err := a.Parse(args); err != nil {
@@ -155,6 +157,10 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	case "human", "agent":
 	default:
 		return opts, fmt.Errorf("invalid --audience value %q: must be 'human' or 'agent'", opts.audience)
+	}
+
+	if opts.maxTools < 0 {
+		return opts, fmt.Errorf("--max-tools must be a non-negative integer (0 means use template default)")
 	}
 
 	return opts, nil
@@ -196,6 +202,7 @@ Flags:
   -f, --format string     output format: text or json (default "text")
   --concurrency int       max concurrent file reviews (default 8)
   --from string           source ref to start diff from (e.g., 'main')
+  --max-tools int         max tool call rounds per file; only takes effect when greater than template default
   -p, --preview           preview which files will be reviewed without running the LLM
   --repo string           root directory of the git repository (default: current dir)
   --rule string           path to JSON file with system review rules
