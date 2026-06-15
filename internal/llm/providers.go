@@ -80,7 +80,7 @@ var registry = []Provider{
 		},
 	},
 	{
-		Name:        "tokenhub",
+		Name:        "tencent-tokenhub",
 		DisplayName: "Tencent TokenHub API",
 		Protocol:    "openai",
 		BaseURL:     "https://tokenhub.tencentmaas.com/v1",
