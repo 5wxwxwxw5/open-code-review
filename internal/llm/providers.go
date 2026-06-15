@@ -64,9 +64,6 @@ var registry = []Provider{
 			"doubao-seed-2-0-lite-260428",
 			"doubao-seed-2-0-mini-260428",
 			"doubao-seed-2-0-pro-260215",
-			"doubao-seed-2-0-lite-260215",
-			"doubao-seed-2-0-mini-260215",
-			"doubao-seed-2-0-code-preview-260215",
 		},
 	},
 	{
