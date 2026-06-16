@@ -40,7 +40,7 @@ func TestListProviders_Order(t *testing.T) {
 	if len(providers) < 3 {
 		t.Fatalf("expected at least 3 providers, got %d", len(providers))
 	}
-	expected := []string{"anthropic", "dashscope", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
+	expected := []string{"anthropic", "dashscope", "dashscope-tokenplan", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
 	if len(providers) != len(expected) {
 		t.Fatalf("expected %d providers, got %d", len(expected), len(providers))
 	}
@@ -111,6 +111,25 @@ func TestLookupProvider_AnthropicDetails(t *testing.T) {
 	}
 	if p.EnvVar != "ANTHROPIC_API_KEY" {
 		t.Errorf("EnvVar = %q, want %q", p.EnvVar, "ANTHROPIC_API_KEY")
+	}
+}
+
+func TestLookupProvider_DashScopeTokenPlanDetails(t *testing.T) {
+	p, ok := LookupProvider("dashscope-tokenplan")
+	if !ok {
+		t.Fatal("dashscope-tokenplan not found")
+	}
+	if p.Protocol != "openai" {
+		t.Errorf("Protocol = %q, want %q", p.Protocol, "openai")
+	}
+	if p.BaseURL != "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" {
+		t.Errorf("BaseURL = %q, want Token Plan compatible-mode endpoint", p.BaseURL)
+	}
+	if p.EnvVar != "DASHSCOPE_TOKENPLAN_KEY" {
+		t.Errorf("EnvVar = %q, want %q", p.EnvVar, "DASHSCOPE_TOKENPLAN_KEY")
+	}
+	if p.AuthHeader != "" {
+		t.Errorf("AuthHeader = %q, want empty", p.AuthHeader)
 	}
 }
 

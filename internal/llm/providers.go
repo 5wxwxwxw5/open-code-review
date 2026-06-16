@@ -57,6 +57,23 @@ var registry = []Provider{
 		},
 	},
 	{
+		Name:        "dashscope-tokenplan",
+		DisplayName: "Alibaba DashScope Token Plan API",
+		Protocol:    "openai",
+		BaseURL:     "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		EnvVar:      "DASHSCOPE_TOKENPLAN_KEY",
+		Models: []string{
+			"qwen3.7-max",
+			"qwen3.7-plus",
+			"qwen3.6-plus",
+			"qwen3.6-flash",
+			"deepseek-v4-pro",
+			"kimi-k2.6",
+			"glm-5.1",
+			"MiniMax-M2.5",
+		},
+	},
+	{
 		Name:        "volcengine",
 		DisplayName: "Volcano Engine Ark API",
 		Protocol:    "openai",
