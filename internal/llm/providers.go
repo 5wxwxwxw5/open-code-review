@@ -185,6 +185,17 @@ var registry = []Provider{
 			"deepseek-v4-flash",
 		},
 	},
+	{
+		Name:        "stepfun",
+		DisplayName: "StepFun API",
+		Protocol:    "openai",
+		BaseURL:     "https://api.stepfun.com/v1",
+		EnvVar:      "STEPFUN_API_KEY",
+		Models: []string{
+			"step-3.7-flash",
+			"step-3.5-flash",
+		},
+	},
 }
 
 var registryMap map[string]Provider
