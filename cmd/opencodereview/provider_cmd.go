@@ -95,6 +95,13 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 	cfg.Llm.URL = result.url
 	cfg.Llm.Model = result.model
 	cfg.Llm.AuthToken = result.apiKey
+	if result.protocol == "anthropic" {
+		useAnthropic := true
+		cfg.Llm.UseAnthropic = &useAnthropic
+	} else {
+		useAnthropic := false
+		cfg.Llm.UseAnthropic = &useAnthropic
+	}
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -102,6 +109,7 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 
 	fmt.Println("\nManual configuration saved.")
 	fmt.Printf("URL: %s\n", result.url)
+	fmt.Printf("Protocol: %s\n", result.protocol)
 	fmt.Printf("Model: %s\n", result.model)
 
 	fmt.Println("\nTesting connection...")

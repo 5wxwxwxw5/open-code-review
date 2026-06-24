@@ -46,6 +46,7 @@ type manualStep int
 
 const (
 	manualStepURL manualStep = iota
+	manualStepProtocol
 	manualStepModel
 	manualStepAuthToken
 )
@@ -93,11 +94,12 @@ type providerTUIModel struct {
 	cpAuthInput     textinput.Model
 
 	// --- tab: manual ---
-	inManualForm     bool
-	manualStep       manualStep
-	manualURLInput   textinput.Model
-	manualModelInput textinput.Model
-	manualTokenInput textinput.Model
+	inManualForm      bool
+	manualStep        manualStep
+	manualProtocolIdx int
+	manualURLInput    textinput.Model
+	manualModelInput  textinput.Model
+	manualTokenInput  textinput.Model
 
 	// --- shared model/api-key steps (official + existing custom) ---
 	modelIdx    int
@@ -113,10 +115,12 @@ type providerTUIModel struct {
 	cancelled   bool
 
 	// --- delete confirmation ---
-	confirmingDelete bool
-	deleteTargetIdx  int
-	deleteTargetName string
-	deletedProviders []string
+	confirmingDelete      bool
+	deleteTargetIdx       int
+	deleteTargetName      string
+	deletedProviders      []string
+	confirmingDeleteModel bool
+	deleteModelName       string
 }
 
 func collectCustomProviders(cfg *Config) []customProviderListItem {
@@ -260,6 +264,11 @@ func newProviderTUI(cfg *Config) providerTUIModel {
 		if cfg.Llm.AuthToken != "" {
 			m.manualTokenInput.SetValue(cfg.Llm.AuthToken)
 		}
+		if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic {
+			m.manualProtocolIdx = 0 // anthropic
+		} else {
+			m.manualProtocolIdx = 1 // openai
+		}
 	}
 
 	return m
@@ -380,6 +389,10 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDeleteConfirm(key)
 		}
 
+		if m.step == stepModel && m.confirmingDeleteModel {
+			return m.updateDeleteModelConfirm(key)
+		}
+
 		switch key {
 		case "ctrl+c":
 			m.cancelled = true
@@ -429,6 +442,14 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmingDelete = true
 				m.deleteTargetIdx = m.customIdx
 				m.deleteTargetName = m.customProviders[m.customIdx].name
+				return m, nil
+			}
+			if m.step == stepModel && m.activeTab == tabCustom && m.customIdx < len(m.customProviders) {
+				models := m.models()
+				if m.modelIdx < len(models) {
+					m.confirmingDeleteModel = true
+					m.deleteModelName = models[m.modelIdx]
+				}
 			}
 			return m, nil
 		}
@@ -661,6 +682,16 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 		return m, m.focusManualStep()
 	case "enter":
 		return m.handleManualFormEnter()
+	case "up", "k":
+		if m.manualStep == manualStepProtocol && m.manualProtocolIdx > 0 {
+			m.manualProtocolIdx--
+		}
+		return m, nil
+	case "down", "j":
+		if m.manualStep == manualStepProtocol && m.manualProtocolIdx < len(cpProtocols)-1 {
+			m.manualProtocolIdx++
+		}
+		return m, nil
 	default:
 		return m.passThroughManualInput(msg)
 	}
@@ -693,20 +724,49 @@ func (m providerTUIModel) updateDeleteConfirm(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m providerTUIModel) updateDeleteModelConfirm(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "y", "Y":
+		if m.customIdx >= len(m.customProviders) {
+			m.confirmingDeleteModel = false
+			return m, nil
+		}
+		models := m.models()
+		if m.modelIdx < len(models) {
+			cp := m.customProviders[m.customIdx]
+			cp.entry.Models = removeFromSlice(cp.entry.Models, m.modelIdx)
+			m.customProviders[m.customIdx] = cp
+			if m.modelIdx >= len(cp.entry.Models) && m.modelIdx > 0 {
+				m.modelIdx = len(cp.entry.Models) - 1
+			}
+		}
+		m.confirmingDeleteModel = false
+		return m, nil
+	case "n", "N", "esc":
+		m.confirmingDeleteModel = false
+		return m, nil
+	case "ctrl+c":
+		m.cancelled = true
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
 func (m providerTUIModel) handleManualFormEnter() (tea.Model, tea.Cmd) {
 	switch m.manualStep {
 	case manualStepURL:
 		if m.manualURLInput.Value() == "" {
 			return m, nil
 		}
-		m.manualURLInput.Blur()
+		m.manualStep = manualStepProtocol
+		return m, nil
+	case manualStepProtocol:
 		m.manualStep = manualStepModel
 		return m, m.manualModelInput.Focus()
 	case manualStepModel:
 		if m.manualModelInput.Value() == "" {
 			return m, nil
 		}
-		m.manualModelInput.Blur()
 		m.manualStep = manualStepAuthToken
 		return m, m.manualTokenInput.Focus()
 	case manualStepAuthToken:
@@ -721,6 +781,8 @@ func (m *providerTUIModel) blurManualStep() {
 	switch m.manualStep {
 	case manualStepURL:
 		m.manualURLInput.Blur()
+	case manualStepProtocol:
+		// no input to blur
 	case manualStepModel:
 		m.manualModelInput.Blur()
 	case manualStepAuthToken:
@@ -732,6 +794,8 @@ func (m providerTUIModel) focusManualStep() tea.Cmd {
 	switch m.manualStep {
 	case manualStepURL:
 		return m.manualURLInput.Focus()
+	case manualStepProtocol:
+		return nil
 	case manualStepModel:
 		return m.manualModelInput.Focus()
 	case manualStepAuthToken:
@@ -745,6 +809,8 @@ func (m providerTUIModel) passThroughManualInput(msg tea.Msg) (tea.Model, tea.Cm
 	switch m.manualStep {
 	case manualStepURL:
 		m.manualURLInput, cmd = m.manualURLInput.Update(msg)
+	case manualStepProtocol:
+		return m, nil
 	case manualStepModel:
 		m.manualModelInput, cmd = m.manualModelInput.Update(msg)
 	case manualStepAuthToken:
@@ -813,15 +879,21 @@ func (m providerTUIModel) handleUp() (tea.Model, tea.Cmd) {
 		case tabOfficial:
 			if m.officialIdx > 0 {
 				m.officialIdx--
+			} else {
+				m.officialIdx = len(m.providers) - 1
 			}
 		case tabCustom:
 			if m.customIdx > 0 {
 				m.customIdx--
+			} else {
+				m.customIdx = m.customListCount() - 1
 			}
 		}
 	case stepModel:
 		if m.modelIdx > 0 {
 			m.modelIdx--
+		} else {
+			m.modelIdx = m.modelCount() - 1
 		}
 	}
 	return m, nil
@@ -834,18 +906,34 @@ func (m providerTUIModel) handleDown() (tea.Model, tea.Cmd) {
 		case tabOfficial:
 			if m.officialIdx < len(m.providers)-1 {
 				m.officialIdx++
+			} else {
+				m.officialIdx = 0
 			}
 		case tabCustom:
 			if m.customIdx < m.customListCount()-1 {
 				m.customIdx++
+			} else {
+				m.customIdx = 0
 			}
 		}
 	case stepModel:
 		if m.modelIdx < m.modelCount()-1 {
 			m.modelIdx++
+		} else {
+			m.modelIdx = 0
 		}
 	}
 	return m, nil
+}
+
+func removeFromSlice(s []string, idx int) []string {
+	if idx < 0 || idx >= len(s) {
+		return s
+	}
+	result := make([]string, 0, len(s)-1)
+	result = append(result, s[:idx]...)
+	result = append(result, s[idx+1:]...)
+	return result
 }
 
 func (m *providerTUIModel) loadExistingAPIKey() {
@@ -950,6 +1038,7 @@ func (m providerTUIModel) result() providerTUIResult {
 			url:      m.manualURLInput.Value(),
 			model:    m.manualModelInput.Value(),
 			apiKey:   m.manualTokenInput.Value(),
+			protocol: cpProtocols[m.manualProtocolIdx],
 		}
 	}
 
@@ -1181,6 +1270,7 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 
 	fields := []field{
 		{"URL", m.manualURLInput.Value(), m.manualStep == manualStepURL},
+		{"Protocol", cpProtocols[m.manualProtocolIdx], m.manualStep == manualStepProtocol},
 		{"Model", m.manualModelInput.Value(), m.manualStep == manualStepModel},
 		{"Auth Token", strings.Repeat("*", len(m.manualTokenInput.Value())), m.manualStep == manualStepAuthToken},
 	}
@@ -1191,6 +1281,18 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 			switch m.manualStep {
 			case manualStepURL:
 				s.WriteString("    " + m.manualURLInput.View() + "\n")
+			case manualStepProtocol:
+				for i, proto := range cpProtocols {
+					cur := "      "
+					if i == m.manualProtocolIdx {
+						cur = "    " + tuiCursorStyle.Render(tuiCursor) + " "
+					}
+					if i == m.manualProtocolIdx {
+						s.WriteString(cur + tuiSelectedItemStyle.Render(proto) + "\n")
+					} else {
+						s.WriteString(cur + tuiItemStyle.Render(proto) + "\n")
+					}
+				}
 			case manualStepModel:
 				s.WriteString("    " + m.manualModelInput.View() + "\n")
 			case manualStepAuthToken:
@@ -1240,7 +1342,16 @@ func (m providerTUIModel) viewModel(s *strings.Builder) {
 	}
 
 	s.WriteString("\n")
-	s.WriteString(tuiHelpStyle.Render("  ↑/↓ Select  Enter Confirm  Esc Back"))
+
+	if m.confirmingDeleteModel {
+		s.WriteString("  " + tuiSelectedItemStyle.Render(fmt.Sprintf("Delete %q? (y/n)", m.deleteModelName)))
+		s.WriteString("\n")
+		s.WriteString(tuiHelpStyle.Render("  y Confirm · n/Esc Cancel"))
+	} else if m.activeTab == tabCustom && m.customIdx < len(m.customProviders) {
+		s.WriteString(tuiHelpStyle.Render("  ↑/↓ Select  Enter Confirm  d Delete  Esc Back"))
+	} else {
+		s.WriteString(tuiHelpStyle.Render("  ↑/↓ Select  Enter Confirm  Esc Back"))
+	}
 	s.WriteString("\n")
 }
 
@@ -1411,11 +1522,15 @@ func (m modelTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.modelIdx > 0 {
 				m.modelIdx--
+			} else {
+				m.modelIdx = m.itemCount() - 1
 			}
 			return m, nil
 		case "down", "j":
 			if m.modelIdx < m.itemCount()-1 {
 				m.modelIdx++
+			} else {
+				m.modelIdx = 0
 			}
 			return m, nil
 		}
