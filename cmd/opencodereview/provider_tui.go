@@ -758,6 +758,7 @@ func (m providerTUIModel) handleManualFormEnter() (tea.Model, tea.Cmd) {
 		if m.manualURLInput.Value() == "" {
 			return m, nil
 		}
+		m.manualURLInput.Blur()
 		m.manualStep = manualStepProtocol
 		return m, nil
 	case manualStepProtocol:
@@ -767,6 +768,7 @@ func (m providerTUIModel) handleManualFormEnter() (tea.Model, tea.Cmd) {
 		if m.manualModelInput.Value() == "" {
 			return m, nil
 		}
+		m.manualModelInput.Blur()
 		m.manualStep = manualStepAuthToken
 		return m, m.manualTokenInput.Focus()
 	case manualStepAuthToken:
@@ -879,7 +881,7 @@ func (m providerTUIModel) handleUp() (tea.Model, tea.Cmd) {
 		case tabOfficial:
 			if m.officialIdx > 0 {
 				m.officialIdx--
-			} else {
+			} else if len(m.providers) > 0 {
 				m.officialIdx = len(m.providers) - 1
 			}
 		case tabCustom:
@@ -906,7 +908,7 @@ func (m providerTUIModel) handleDown() (tea.Model, tea.Cmd) {
 		case tabOfficial:
 			if m.officialIdx < len(m.providers)-1 {
 				m.officialIdx++
-			} else {
+			} else if len(m.providers) > 0 {
 				m.officialIdx = 0
 			}
 		case tabCustom:
@@ -1215,13 +1217,11 @@ func (m providerTUIModel) viewCustomProviderForm(s *strings.Builder) {
 				s.WriteString("    " + m.cpNameInput.View() + "\n")
 			case cpStepProtocol:
 				for i, proto := range cpProtocols {
-					cur := "      "
 					if i == m.cpProtocolIdx {
-						cur = "    " + tuiCursorStyle.Render(tuiCursor) + " "
-					}
-					if i == m.cpProtocolIdx {
+						cur := "    " + tuiCursorStyle.Render(tuiCursor) + " "
 						s.WriteString(cur + tuiSelectedItemStyle.Render(proto) + "\n")
 					} else {
+						cur := "      "
 						s.WriteString(cur + tuiItemStyle.Render(proto) + "\n")
 					}
 				}
@@ -1283,13 +1283,11 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 				s.WriteString("    " + m.manualURLInput.View() + "\n")
 			case manualStepProtocol:
 				for i, proto := range cpProtocols {
-					cur := "      "
 					if i == m.manualProtocolIdx {
-						cur = "    " + tuiCursorStyle.Render(tuiCursor) + " "
-					}
-					if i == m.manualProtocolIdx {
+						cur := "    " + tuiCursorStyle.Render(tuiCursor) + " "
 						s.WriteString(cur + tuiSelectedItemStyle.Render(proto) + "\n")
 					} else {
+						cur := "      "
 						s.WriteString(cur + tuiItemStyle.Render(proto) + "\n")
 					}
 				}
