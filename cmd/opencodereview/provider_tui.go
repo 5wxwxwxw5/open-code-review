@@ -883,10 +883,9 @@ func (m providerTUIModel) applyCreateCustomProvider() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyEditCustomProviderSave persists the edited provider to disk. Returns
-// true if a hard validation error stopped the save (caller should keep the
-// user in the form); false means the save was applied successfully and the
-// caller may navigate away (e.g. into the model list).
+// cloneProviderEntry deep-copies a ProviderEntry so callers (rollback paths,
+// map cloning) can safely mutate the returned value without aliasing the
+// original's slice or map fields.
 func cloneProviderEntry(v ProviderEntry) ProviderEntry {
 	out := ProviderEntry{
 		APIKey:     v.APIKey,
@@ -1187,21 +1186,15 @@ func (m providerTUIModel) updateDeleteModelConfirm(key string) (tea.Model, tea.C
 					return m, nil
 				}
 			}
-			if m.deletedModels == nil {
-				m.deletedModels = make(map[string][]string)
-			}
-			m.deletedModels[cp.name] = append(m.deletedModels[cp.name], m.deleteModelName)
-			m.savedInSession = true
-		if len(m.models()) > 0 {
-			if remaining := len(m.models()); m.modelIdx >= remaining {
-				if remaining > 0 {
-					m.modelIdx = remaining - 1
+			updated := m.models()
+			if m.modelIdx >= len(updated) {
+				if len(updated) > 0 {
+					m.modelIdx = len(updated) - 1
 				} else {
 					m.modelIdx = 0
 				}
 			}
 		}
-	}
 		m.confirmingDeleteModel = false
 		return m, nil
 	case "n", "N", "esc":
@@ -1399,16 +1392,6 @@ func configPathFromArgs(args []string) string {
 		return args[0]
 	}
 	return ""
-}
-
-func removeFromSlice(s []string, idx int) []string {
-	if idx < 0 || idx >= len(s) {
-		return s
-	}
-	result := make([]string, 0, len(s)-1)
-	result = append(result, s[:idx]...)
-	result = append(result, s[idx+1:]...)
-	return result
 }
 
 func (m *providerTUIModel) loadExistingAPIKey() {

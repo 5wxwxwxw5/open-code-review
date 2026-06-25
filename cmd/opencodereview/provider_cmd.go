@@ -42,15 +42,6 @@ func runConfigProvider() error {
 		return nil
 	}
 
-	// Provider deletions are deferred to the final step (matching the TUI's
-	// in-memory list mutation, not its disk save, since deletes are not
-	// written through during the session).
-	if len(final.deletedProviders) > 0 {
-		if _, err := applyProviderDeletions(configPath, cfg, final.deletedProviders); err != nil {
-			return err
-		}
-	}
-
 	result := final.result()
 
 	if result.isManual {
