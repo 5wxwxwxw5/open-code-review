@@ -293,8 +293,11 @@ func TestProviderTUI_ManualFormEscRestoresOriginalValues(t *testing.T) {
 	if m3.manualModelInput.Value() != "test-model" {
 		t.Errorf("Model not restored: got %q, want %q", m3.manualModelInput.Value(), "test-model")
 	}
-	if m3.manualTokenInput.Value() != "token-123" {
-		t.Errorf("Token not restored: got %q, want %q", m3.manualTokenInput.Value(), "token-123")
+	if !m3.manualTokenMasked {
+		t.Error("Token should be masked after Esc restore")
+	}
+	if m3.manualTokenOriginal != "token-123" {
+		t.Errorf("Token original not restored: got %q, want %q", m3.manualTokenOriginal, "token-123")
 	}
 }
 
@@ -317,8 +320,14 @@ func TestProviderTUI_ManualFormPrefilledValues(t *testing.T) {
 	if m.manualModelInput.Value() != "test-model" {
 		t.Errorf("Model not prefilled: got %q", m.manualModelInput.Value())
 	}
-	if m.manualTokenInput.Value() != "token-123" {
-		t.Errorf("Token not prefilled: got %q", m.manualTokenInput.Value())
+	if !m.manualTokenMasked {
+		t.Error("Token should be masked when prefilled")
+	}
+	if m.manualTokenOriginal != "token-123" {
+		t.Errorf("Token original not prefilled: got %q, want %q", m.manualTokenOriginal, "token-123")
+	}
+	if m.manualTokenInput.Value() != strings.Repeat("*", 20) {
+		t.Errorf("Token input not masked display: got %q", m.manualTokenInput.Value())
 	}
 }
 
@@ -372,8 +381,11 @@ func TestProviderTUI_ManualFormPrefilledWhenProviderSet(t *testing.T) {
 	if m.manualModelInput.Value() != "manual-model" {
 		t.Errorf("Model not prefilled: got %q", m.manualModelInput.Value())
 	}
-	if m.manualTokenInput.Value() != "manual-token" {
-		t.Errorf("Token not prefilled: got %q", m.manualTokenInput.Value())
+	if !m.manualTokenMasked {
+		t.Error("Token should be masked when prefilled")
+	}
+	if m.manualTokenOriginal != "manual-token" {
+		t.Errorf("Token original not prefilled: got %q, want %q", m.manualTokenOriginal, "manual-token")
 	}
 }
 
