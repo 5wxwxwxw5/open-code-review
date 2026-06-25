@@ -42,8 +42,14 @@ func runConfigProvider() error {
 		}
 	}
 
+	if len(final.deletedModels) > 0 {
+		if err := applyModelDeletions(configPath, cfg, final.deletedModels); err != nil {
+			return err
+		}
+	}
+
 	if !final.confirmed {
-		if len(final.deletedProviders) > 0 {
+		if len(final.deletedProviders) > 0 || len(final.deletedModels) > 0 {
 			return nil
 		}
 		fmt.Println("Cancelled.")
@@ -80,6 +86,60 @@ func applyProviderDeletions(configPath string, cfg *Config, names []string) (boo
 		return false, err
 	}
 	return clearedActive, nil
+}
+
+func applyModelDeletions(configPath string, cfg *Config, deletedModels map[string][]string) error {
+	if cfg.CustomProviders == nil {
+		return nil
+	}
+	changed := false
+	for name, models := range deletedModels {
+		entry, ok := cfg.CustomProviders[name]
+		if !ok {
+			continue
+		}
+		original := entry.Models
+		entry.Models = removeModels(entry.Models, models)
+		modelsChanged := len(entry.Models) != len(original)
+
+		entryChanged := modelsChanged
+		if modelListContains(models, entry.Model) {
+			entry.Model = ""
+			entryChanged = true
+		}
+		if cfg.Provider == name && modelListContains(models, cfg.Model) {
+			cfg.Model = ""
+			changed = true
+		}
+		if entryChanged {
+			cfg.CustomProviders[name] = entry
+			changed = true
+			for _, m := range original {
+				if !modelListContains(entry.Models, m) {
+					fmt.Printf("Deleted model %q from custom provider %q.\n", m, name)
+				}
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return saveConfig(configPath, cfg)
+}
+
+func removeModels(existing, toRemove []string) []string {
+	removeSet := make(map[string]struct{}, len(toRemove))
+	for _, m := range toRemove {
+		removeSet[m] = struct{}{}
+	}
+	result := make([]string, 0, len(existing))
+	for _, m := range existing {
+		if _, found := removeSet[m]; found {
+			continue
+		}
+		result = append(result, m)
+	}
+	return result
 }
 
 func applyManualConfig(configPath string, cfg *Config, result providerTUIResult) error {

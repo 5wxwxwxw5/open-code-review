@@ -94,12 +94,14 @@ type providerTUIModel struct {
 	cpAuthInput     textinput.Model
 
 	// --- tab: manual ---
-	inManualForm      bool
-	manualStep        manualStep
-	manualProtocolIdx int
-	manualURLInput    textinput.Model
-	manualModelInput  textinput.Model
-	manualTokenInput  textinput.Model
+	inManualForm        bool
+	manualStep          manualStep
+	manualProtocolIdx   int
+	manualURLInput      textinput.Model
+	manualModelInput    textinput.Model
+	manualTokenInput    textinput.Model
+	manualTokenMasked   bool
+	manualTokenOriginal string
 
 	// --- shared model/api-key steps (official + existing custom) ---
 	modelIdx    int
@@ -121,6 +123,7 @@ type providerTUIModel struct {
 	deletedProviders      []string
 	confirmingDeleteModel bool
 	deleteModelName       string
+	deletedModels         map[string][]string
 }
 
 func collectCustomProviders(cfg *Config) []customProviderListItem {
@@ -262,7 +265,9 @@ func newProviderTUI(cfg *Config) providerTUIModel {
 		m.manualURLInput.SetValue(cfg.Llm.URL)
 		m.manualModelInput.SetValue(cfg.Llm.Model)
 		if cfg.Llm.AuthToken != "" {
-			m.manualTokenInput.SetValue(cfg.Llm.AuthToken)
+			m.manualTokenOriginal = cfg.Llm.AuthToken
+			m.manualTokenMasked = true
+			m.manualTokenInput.SetValue(strings.Repeat("*", 20))
 		}
 		if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic {
 			m.manualProtocolIdx = 0 // anthropic
@@ -669,11 +674,21 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 			if m.existingCfg != nil {
 				m.manualURLInput.SetValue(m.existingCfg.Llm.URL)
 				m.manualModelInput.SetValue(m.existingCfg.Llm.Model)
-				m.manualTokenInput.SetValue(m.existingCfg.Llm.AuthToken)
+				if m.existingCfg.Llm.AuthToken != "" {
+					m.manualTokenOriginal = m.existingCfg.Llm.AuthToken
+					m.manualTokenMasked = true
+					m.manualTokenInput.SetValue(strings.Repeat("*", 20))
+				} else {
+					m.manualTokenInput.SetValue("")
+					m.manualTokenMasked = false
+					m.manualTokenOriginal = ""
+				}
 			} else {
 				m.manualURLInput.SetValue("")
 				m.manualModelInput.SetValue("")
 				m.manualTokenInput.SetValue("")
+				m.manualTokenMasked = false
+				m.manualTokenOriginal = ""
 			}
 			return m, nil
 		}
@@ -693,6 +708,14 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 		}
 		return m, nil
 	default:
+		if m.manualStep == manualStepAuthToken && m.manualTokenMasked {
+			if len(key) == 1 {
+				m.manualTokenMasked = false
+				m.manualTokenInput.SetValue("")
+			} else {
+				return m, nil
+			}
+		}
 		return m.passThroughManualInput(msg)
 	}
 }
@@ -734,8 +757,15 @@ func (m providerTUIModel) updateDeleteModelConfirm(key string) (tea.Model, tea.C
 		models := m.models()
 		if m.modelIdx < len(models) {
 			cp := m.customProviders[m.customIdx]
+			if cp.entry.Model == m.deleteModelName {
+				cp.entry.Model = ""
+			}
 			cp.entry.Models = removeFromSlice(cp.entry.Models, m.modelIdx)
 			m.customProviders[m.customIdx] = cp
+			if m.deletedModels == nil {
+				m.deletedModels = make(map[string][]string)
+			}
+			m.deletedModels[cp.name] = append(m.deletedModels[cp.name], m.deleteModelName)
 			if m.modelIdx >= len(cp.entry.Models) && m.modelIdx > 0 {
 				m.modelIdx = len(cp.entry.Models) - 1
 			}
@@ -1035,11 +1065,15 @@ func (m providerTUIModel) result() providerTUIResult {
 		return providerTUIResult{}
 
 	case tabManual:
+		apiKey := m.manualTokenInput.Value()
+		if m.manualTokenMasked {
+			apiKey = m.manualTokenOriginal
+		}
 		return providerTUIResult{
 			isManual: true,
 			url:      m.manualURLInput.Value(),
 			model:    m.manualModelInput.Value(),
-			apiKey:   m.manualTokenInput.Value(),
+			apiKey:   apiKey,
 			protocol: cpProtocols[m.manualProtocolIdx],
 		}
 	}
