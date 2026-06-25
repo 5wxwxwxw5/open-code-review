@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -448,6 +450,107 @@ func TestProviderTUI_CustomFormEscFromNameExitsForm(t *testing.T) {
 	}
 }
 
+func TestProviderTUI_CustomFormRejectsDuplicateName(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {Model: "xxx"},
+		},
+	}
+	m := newProviderTUI(cfg)
+
+	result, _ := m.Update(downKey())
+	m2 := result.(providerTUIModel)
+
+	result, _ = m2.Update(enterKey())
+	m3 := result.(providerTUIModel)
+	if !m3.creatingCustom {
+		t.Fatal("should be creating custom")
+	}
+
+	m3.cpNameInput.SetValue("stepfun")
+	result, _ = m3.Update(enterKey())
+	m4 := result.(providerTUIModel)
+	if m4.cpStep != cpStepName {
+		t.Errorf("cpStep = %d, want %d", m4.cpStep, cpStepName)
+	}
+	if m4.formError == "" {
+		t.Error("expected formError for duplicate name")
+	}
+	if !strings.Contains(m4.formError, "stepfun") {
+		t.Errorf("formError = %q, want to mention stepfun", m4.formError)
+	}
+
+	result, _ = m4.Update(charKey('x'))
+	m4b := result.(providerTUIModel)
+	if m4b.formError == "" {
+		t.Error("formError should persist while typing")
+	}
+
+	m4b.cpNameInput.SetValue("stepfun2")
+	result, _ = m4b.Update(enterKey())
+	m5 := result.(providerTUIModel)
+	if m5.cpStep != cpStepProtocol {
+		t.Errorf("cpStep = %d, want %d", m5.cpStep, cpStepProtocol)
+	}
+	if m5.formError != "" {
+		t.Errorf("formError = %q, want empty after valid name", m5.formError)
+	}
+}
+
+func TestProviderTUI_CustomFormCreateReturnsToModelList(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{}
+	m := newProviderTUI(cfg, configPath)
+
+	result, _ := m.Update(rightKey())
+	m2 := result.(providerTUIModel)
+	result, _ = m2.Update(enterKey())
+	m3 := result.(providerTUIModel)
+
+	m3.cpNameInput.SetValue("my-new")
+	result, _ = m3.Update(enterKey()) // name -> protocol
+	m4 := result.(providerTUIModel)
+	result, _ = m4.Update(enterKey()) // protocol -> URL
+	m5 := result.(providerTUIModel)
+	m5.cpURLInput.SetValue("https://api.example.com")
+	result, _ = m5.Update(enterKey()) // URL -> API key
+	m6 := result.(providerTUIModel)
+	m6.apiKeyInput.SetValue("key-123")
+	result, _ = m6.Update(enterKey()) // API key -> auth header
+	m7 := result.(providerTUIModel)
+	result, cmd := m7.Update(enterKey()) // auth header -> save
+	m8 := result.(providerTUIModel)
+
+	if cmd != nil {
+		t.Error("create should not quit TUI")
+	}
+	if m8.creatingCustom {
+		t.Error("creatingCustom should be false after create")
+	}
+	// Create should drop the user into the model selection step for the new
+	// provider so they can pick/add a model right away.
+	if m8.step != stepModel {
+		t.Errorf("step = %d, want stepModel", m8.step)
+	}
+	if len(m8.customProviders) != 1 {
+		t.Fatalf("expected 1 custom provider, got %d", len(m8.customProviders))
+	}
+	if m8.customProviders[0].name != "my-new" {
+		t.Errorf("provider name = %q, want %q", m8.customProviders[0].name, "my-new")
+	}
+	if cfg.Provider != "" {
+		t.Error("active provider should not be set when only creating")
+	}
+	if !m8.savedInSession {
+		t.Error("savedInSession should be true after create")
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("config should be saved: %v", err)
+	}
+}
+
 func TestProviderTUI_CustomProviderExistsInList(t *testing.T) {
 	cfg := &Config{
 		Provider: "my-llm",
@@ -494,8 +597,9 @@ func TestProviderTUI_SelectExistingCustomGoesToModel(t *testing.T) {
 	if m2.step != stepModel {
 		t.Errorf("step = %d, want %d (stepModel)", m2.step, stepModel)
 	}
-	if m2.models()[0] != "custom-model" {
-		t.Errorf("first model = %q, want %q", m2.models()[0], "custom-model")
+	gotModels := m2.models()
+	if len(gotModels) != 2 || gotModels[0] != "custom-fast" || gotModels[1] != "custom-model" {
+		t.Errorf("models = %v, want [custom-fast custom-model] (sorted)", gotModels)
 	}
 }
 
@@ -609,6 +713,7 @@ func TestProviderTUI_DeleteCustomProviderCancel(t *testing.T) {
 	}
 	m := newProviderTUI(cfg)
 
+	// Force custom tab so this test is independent of init-time tab routing.
 	// Switch to custom tab, select provider, press d
 	result, _ := m.Update(rightKey())
 	m2 := result.(providerTUIModel)
@@ -706,5 +811,77 @@ func TestProviderTUI_DeleteEscCancels(t *testing.T) {
 	}
 	if len(m4.deletedProviders) != 0 {
 		t.Error("no providers should be deleted after Esc")
+	}
+}
+
+func TestActiveModelForProvider_PrefersEntryModel(t *testing.T) {
+	cfg := &Config{Provider: "stepfun", Model: "step-3.7-flash"}
+	entry := ProviderEntry{Model: "step-3.5-flash"}
+	got := activeModelForProvider(cfg, "stepfun", entry)
+	if got != "step-3.5-flash" {
+		t.Errorf("got %q, want step-3.5-flash", got)
+	}
+}
+
+func TestActiveModelForProvider_FallsBackToCfgModel(t *testing.T) {
+	cfg := &Config{Provider: "stepfun", Model: "step-3.5-flash"}
+	entry := ProviderEntry{}
+	got := activeModelForProvider(cfg, "stepfun", entry)
+	if got != "step-3.5-flash" {
+		t.Errorf("got %q, want step-3.5-flash", got)
+	}
+}
+
+func TestProviderTUI_ModelListActiveModelName(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		Model:    "step-3.5-flash",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				Model:  "step-3.5-flash",
+				Models: []string{"step-3.5-flash", "step-3.7-flash"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg)
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepModel
+
+	if got := m.modelListActiveModelName(); got != "step-3.5-flash" {
+		t.Errorf("modelListActiveModelName = %q, want step-3.5-flash", got)
+	}
+}
+
+func TestProviderTUI_DeleteModelPreservesActiveHighlight(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		Model:    "step-3.5-flash",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				Model:  "step-3.5-flash",
+				Models: []string{"step-3.5-flash", "aaa"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg)
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepModel
+	m.modelIdx = 1 // aaa
+
+	m.confirmingDeleteModel = true
+	m.deleteModelName = "aaa"
+	result, _ := m.Update(yKey())
+	m2 := result.(providerTUIModel)
+
+	if m2.existingCfg.CustomProviders["stepfun"].Model != "step-3.5-flash" {
+		t.Errorf("entry.Model = %q, want step-3.5-flash", m2.existingCfg.CustomProviders["stepfun"].Model)
+	}
+	if m2.existingCfg.Model != "step-3.5-flash" {
+		t.Errorf("cfg.Model = %q, want step-3.5-flash", m2.existingCfg.Model)
+	}
+	if got := m2.modelListActiveModelName(); got != "step-3.5-flash" {
+		t.Errorf("modelListActiveModelName = %q, want step-3.5-flash", got)
 	}
 }

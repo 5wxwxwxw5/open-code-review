@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -368,6 +369,32 @@ func parseModelListValue(value string) ([]string, error) {
 	}
 
 	return normalizeModelList(strings.Split(value, ",")), nil
+}
+
+func activeModelForProvider(cfg *Config, providerName string, entry ProviderEntry) string {
+	if entry.Model != "" {
+		return entry.Model
+	}
+	if cfg != nil && cfg.Provider == providerName && cfg.Model != "" {
+		return cfg.Model
+	}
+	return ""
+}
+
+func sortModelsByName(models []string) []string {
+	if len(models) < 2 {
+		return models
+	}
+	sorted := append([]string(nil), models...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left := strings.ToLower(sorted[i])
+		right := strings.ToLower(sorted[j])
+		if left == right {
+			return sorted[i] < sorted[j]
+		}
+		return left < right
+	})
+	return sorted
 }
 
 func normalizeModelList(models []string) []string {

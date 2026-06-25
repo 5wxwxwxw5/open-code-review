@@ -22,7 +22,7 @@ func runConfigProvider() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, configPath)
 	p := tea.NewProgram(m)
 	finalModel, err := p.Run()
 	if err != nil {
@@ -31,29 +31,24 @@ func runConfigProvider() error {
 
 	final := finalModel.(providerTUIModel)
 
-	if len(final.deletedProviders) > 0 {
-		clearedActive, err := applyProviderDeletions(configPath, cfg, final.deletedProviders)
-		if err != nil {
-			return err
-		}
-		if clearedActive && !final.confirmed {
-			fmt.Fprintf(os.Stderr, "[ocr] WARNING: active provider was deleted; 'provider' and 'model' have been cleared.\n")
-			fmt.Fprintf(os.Stderr, "[ocr] Run 'ocr config provider' to select a new provider.\n")
-		}
-	}
-
-	if len(final.deletedModels) > 0 {
-		if err := applyModelDeletions(configPath, cfg, final.deletedModels); err != nil {
-			return err
-		}
-	}
-
 	if !final.confirmed {
-		if len(final.deletedProviders) > 0 || len(final.deletedModels) > 0 {
+		// TUI persists changes (create/edit/model/add/delete) directly to disk
+		// during the session, so the on-disk file is already up to date for any
+		// savedInSession operation. No additional post-TUI apply step is needed.
+		if final.savedInSession {
 			return nil
 		}
 		fmt.Println("Cancelled.")
 		return nil
+	}
+
+	// Provider deletions are deferred to the final step (matching the TUI's
+	// in-memory list mutation, not its disk save, since deletes are not
+	// written through during the session).
+	if len(final.deletedProviders) > 0 {
+		if _, err := applyProviderDeletions(configPath, cfg, final.deletedProviders); err != nil {
+			return err
+		}
 	}
 
 	result := final.result()
@@ -89,41 +84,39 @@ func applyProviderDeletions(configPath string, cfg *Config, names []string) (boo
 }
 
 func applyModelDeletions(configPath string, cfg *Config, deletedModels map[string][]string) error {
-	if cfg.CustomProviders == nil {
+	if len(deletedModels) == 0 {
 		return nil
 	}
-	changed := false
-	for name, models := range deletedModels {
-		entry, ok := cfg.CustomProviders[name]
-		if !ok {
-			continue
-		}
-		original := entry.Models
-		entry.Models = removeModels(entry.Models, models)
-		modelsChanged := len(entry.Models) != len(original)
+	if cfg.CustomProviders != nil {
+		for name, models := range deletedModels {
+			entry, ok := cfg.CustomProviders[name]
+			if !ok {
+				continue
+			}
+			original := entry.Models
+			entry.Models = removeModels(entry.Models, models)
+			modelsChanged := len(entry.Models) != len(original)
 
-		entryChanged := modelsChanged
-		if modelListContains(models, entry.Model) {
-			entry.Model = ""
-			entryChanged = true
-		}
-		if cfg.Provider == name && modelListContains(models, cfg.Model) {
-			cfg.Model = ""
-			changed = true
-		}
-		if entryChanged {
-			cfg.CustomProviders[name] = entry
-			changed = true
-			for _, m := range original {
-				if !modelListContains(entry.Models, m) {
-					fmt.Printf("Deleted model %q from custom provider %q.\n", m, name)
+			entryChanged := modelsChanged
+			if modelListContains(models, entry.Model) {
+				entry.Model = ""
+				entryChanged = true
+			}
+			if cfg.Provider == name && modelListContains(models, cfg.Model) {
+				cfg.Model = ""
+			}
+			if entryChanged {
+				cfg.CustomProviders[name] = entry
+				for _, m := range original {
+					if !modelListContains(entry.Models, m) {
+						fmt.Printf("Deleted model %q from custom provider %q.\n", m, name)
+					}
 				}
 			}
 		}
 	}
-	if !changed {
-		return nil
-	}
+	// Always persist when deletions were requested; in-session TUI edits may
+	// have already applied changes to cfg, making a diff-based changed flag unreliable.
 	return saveConfig(configPath, cfg)
 }
 
@@ -213,13 +206,26 @@ func applyCustomProviderConfig(configPath string, cfg *Config, result providerTU
 	}
 	cfg.CustomProviders[result.provider] = entry
 
-	if cfg.Provider != result.provider {
-		cfg.Model = ""
+	if !result.isEdit {
+		cfg.Provider = result.provider
+		cfg.Model = result.model
+	} else if cfg.Provider == result.provider {
+		cfg.Model = result.model
 	}
-	cfg.Provider = result.provider
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
+	}
+
+	if result.isEdit {
+		if cfg.Provider == result.provider {
+			fmt.Printf("\nActive provider %q updated.\n", result.provider)
+		} else {
+			fmt.Printf("\nCustom provider %q updated (not currently active).\n", result.provider)
+		}
+		fmt.Printf("Model: %s\n", result.model)
+		fmt.Println("\nTip: run 'ocr config model' to switch model later.")
+		return nil
 	}
 
 	fmt.Printf("\nProvider set to: %s (custom)\n", result.provider)
@@ -271,6 +277,7 @@ func applyOfficialProviderConfig(configPath string, cfg *Config, result provider
 		cfg.Model = ""
 	}
 	cfg.Provider = result.provider
+	cfg.Model = result.model
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -311,7 +318,7 @@ func runConfigModel() error {
 	if preset, isPreset := llm.LookupProvider(cfg.Provider); isPreset {
 		provider = preset
 		if entry, ok := cfg.Providers[cfg.Provider]; ok {
-			currentModel = entry.Model
+			currentModel = activeModelForProvider(cfg, cfg.Provider, entry)
 			provider.Models = mergeModelLists(provider.Models, entry.Models)
 		}
 	} else {
@@ -320,14 +327,11 @@ func runConfigModel() error {
 		if !ok {
 			return fmt.Errorf("provider %q is not configured in custom_providers", cfg.Provider)
 		}
-		currentModel = entry.Model
+		currentModel = activeModelForProvider(cfg, cfg.Provider, entry)
 		provider.DisplayName = cfg.Provider + " (custom)"
 		provider.Protocol = entry.Protocol
 		provider.BaseURL = entry.URL
 		provider.Models = mergeModelLists(entry.Models)
-	}
-	if currentModel == "" {
-		currentModel = cfg.Model
 	}
 
 	m := newModelTUI(provider, currentModel)
@@ -367,6 +371,7 @@ func runConfigModel() error {
 		}
 		cfg.Providers[cfg.Provider] = entry
 	}
+	cfg.Model = selectedModel
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
