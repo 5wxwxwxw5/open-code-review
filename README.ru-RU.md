@@ -162,6 +162,8 @@ sudo cp dist/opencodereview /usr/local/bin/ocr
 
 **Перед запуском ревью необходимо настроить LLM.**
 
+OCR управляет конфигурацией LLM через единую систему **провайдеров (Provider)**. Множество популярных провайдеров встроено, также поддерживается добавление пользовательских провайдеров для подключения к приватным развёртываниям или другим совместимым эндпоинтам. Конфигурация хранится в `~/.opencodereview/config.json`.
+
 **Вариант A: интерактивная настройка (рекомендуется)**
 
 ```bash
@@ -171,26 +173,47 @@ ocr config model             # Выбрать модель для активно
 
 ![Provider setup](imgs/providers.jpg)
 
-**Вариант B: ручная настройка**
+Интерактивный UI проведёт вас через выбор провайдера, ввод API-ключа и настройку модели, после чего автоматически проверит подключение.
+
+Выполните `ocr llm providers`, чтобы увидеть все встроенные провайдеры. У встроенных провайдеров предустановлены URL API и протокол — достаточно указать API-ключ. Если соответствующая переменная окружения уже задана (например, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), API-ключ будет подхвачен автоматически.
+
+**Пользовательские провайдеры** также добавляются через интерактивный UI — потребуется указать имя, URL API, тип протокола (`anthropic` или `openai`) и API-ключ.
+
+**Вариант B: настройка через CLI (для CI/CD и неинтерактивных сред)**
+
+Используйте `ocr config set` для записи конфигурации провайдера напрямую — подходит для скриптов и автоматизации.
+
+Использование встроенного провайдера:
 
 ```bash
-ocr config set llm.url https://api.anthropic.com/v1/messages
-ocr config set llm.auth_token your-api-key-here
-ocr config set llm.model claude-opus-4-6
-ocr config set llm.use_anthropic true
+ocr config set provider anthropic
+ocr config set providers.anthropic.api_key your-api-key-here
+ocr config set providers.anthropic.model claude-sonnet-4-6
 ```
 
-Конфигурация хранится в `~/.opencodereview/config.json`.
-
-**`auth_header` (необязательно):** определяет, в каком HTTP-заголовке передаётся API-ключ при работе с Anthropic. Если не задан, по умолчанию используется `authorization` (Bearer-токен). Если у вас стандартный API-ключ вида `sk-ant-*`, необходимо установить значение `x-api-key`:
+Использование пользовательского провайдера (приватный шлюз или другой совместимый эндпоинт):
 
 ```bash
-ocr config set llm.auth_header x-api-key
+ocr config set provider my-gateway
+ocr config set custom_providers.my-gateway.url https://my-llm-gateway.internal/v1
+ocr config set custom_providers.my-gateway.protocol openai
+ocr config set custom_providers.my-gateway.api_key your-api-key-here
+ocr config set custom_providers.my-gateway.model gpt-4o
 ```
 
-Поддерживаемые значения: `x-api-key`, `authorization` (алиас: `bearer`). Прочие значения отклоняются с ошибкой.
+> Для пользовательских провайдеров `url` и `protocol` обязательны. Поддерживаемые протоколы: `anthropic`, `openai`.
 
-**Вариант C: переменные окружения (наивысший приоритет)**
+Дополнительные настройки:
+
+| Ключ | Описание |
+|------|----------|
+| `providers.<name>.auth_header` | Заголовок аутентификации: `x-api-key` или `authorization` (по умолчанию: `authorization`) |
+| `providers.<name>.extra_body` | Пользовательские JSON-поля, добавляемые в тело запроса |
+| `providers.<name>.models` | Список моделей для интерактивного выбора |
+
+**Переменные окружения (наивысший приоритет)**
+
+Переменные окружения переопределяют настройки из файла конфигурации — удобно в CI/CD, где запись в конфиг-файл затруднена:
 
 ```bash
 export OCR_LLM_URL=https://api.anthropic.com/v1/messages
@@ -199,14 +222,12 @@ export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
 
-Инструмент также совместим с переменными окружения Claude Code (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) и разбирает `~/.zshrc` / `~/.bashrc` в поисках соответствующих export'ов.
+Также совместим с переменными окружения Claude Code (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) и разбирает `~/.zshrc` / `~/.bashrc` в поисках соответствующих export'ов.
 
-> **Примечание для пользователей CC-Switch**: если вы используете [CC-Switch](https://github.com/farion1231/cc-switch) с включённым [routing service](https://www.ccswitch.io/en/docs?section=proxy&item=service), можно указать в `llm.url` адрес прокси CC-Switch без дополнительной настройки:
-> - для провайдера **Claude**: установите `llm.url` в `http://127.0.0.1:15721`
-> - для провайдера **Codex**: установите `llm.url` в `http://127.0.0.1:15721/v1`
-> - `llm.model` задайте в соответствии с настройками вашего провайдера
-> - `llm.auth_token` может быть любым
-> - настройки `extra_body` продолжают действовать
+> **Примечание для пользователей CC-Switch**: если вы используете [CC-Switch](https://github.com/farion1231/cc-switch) с включённым [routing service](https://www.ccswitch.io/en/docs?section=proxy&item=service), можно указать в `url` провайдера адрес прокси CC-Switch без дополнительной настройки:
+> - Для провайдера **Claude**: установите `providers.anthropic.url` в `http://127.0.0.1:15721`
+> - Для провайдера **Codex**: установите `url` соответствующего провайдера в `http://127.0.0.1:15721/v1`
+> - `api_key` может быть любым, настройки `extra_body` продолжают действовать
 
 **2. Проверьте подключение**
 

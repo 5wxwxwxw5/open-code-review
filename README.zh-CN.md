@@ -162,6 +162,8 @@ sudo cp dist/opencodereview /usr/local/bin/ocr
 
 **在审查代码之前，必须先配置 LLM。**
 
+OCR 通过**供应商（Provider）**模式统一管理 LLM 配置，内置了多种主流供应商，也支持添加自定义供应商以对接私有部署或其他兼容端点。配置存储于 `~/.opencodereview/config.json`。
+
 **方式 A：交互式设置（推荐）**
 
 ```bash
@@ -171,26 +173,47 @@ ocr config model             # 为当前供应商选择模型
 
 ![Provider setup](imgs/providers.jpg)
 
-**方式 B：手动配置**
+交互式界面会引导你完成供应商选择、API Key 输入和模型配置，完成后自动测试连通性。
+
+运行 `ocr llm providers` 可查看所有内置供应商。内置供应商预设了 API 地址和协议，只需提供 API Key 即可使用。如果对应的环境变量已设置（如 `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`），API Key 会自动读取，无需手动输入。
+
+添加**自定义供应商**同样通过交互式界面完成 —— 需提供供应商名称、API 地址、协议类型（`anthropic` 或 `openai`）和 API Key。
+
+**方式 B：命令行设置（适用于 CI/CD 等无交互环境）**
+
+通过 `ocr config set` 命令直接写入供应商配置，适用于脚本和自动化场景。
+
+使用内置供应商：
 
 ```bash
-ocr config set llm.url https://api.anthropic.com/v1/messages
-ocr config set llm.auth_token your-api-key-here
-ocr config set llm.model claude-opus-4-6
-ocr config set llm.use_anthropic true
+ocr config set provider anthropic
+ocr config set providers.anthropic.api_key your-api-key-here
+ocr config set providers.anthropic.model claude-sonnet-4-6
 ```
 
-配置存储于 `~/.opencodereview/config.json`。
-
-**`auth_header`（可选）：** 控制使用 Anthropic 时通过哪个 HTTP header 传递 API key。省略时默认为 `authorization`（Bearer token）。如果你使用标准 `sk-ant-*` API key，需要将其设为 `x-api-key`：
+使用自定义供应商（对接私有网关或其他兼容端点）：
 
 ```bash
-ocr config set llm.auth_header x-api-key
+ocr config set provider my-gateway
+ocr config set custom_providers.my-gateway.url https://my-llm-gateway.internal/v1
+ocr config set custom_providers.my-gateway.protocol openai
+ocr config set custom_providers.my-gateway.api_key your-api-key-here
+ocr config set custom_providers.my-gateway.model gpt-4o
 ```
 
-支持的值：`x-api-key`、`authorization`（别名：`bearer`）。其他值会直接报错。
+> 自定义供应商的 `url` 和 `protocol` 为必填项。`protocol` 支持 `anthropic` 和 `openai` 两种。
 
-**方式 C：环境变量（优先级最高）**
+可选配置项：
+
+| 键 | 描述 |
+|----|------|
+| `providers.<name>.auth_header` | 认证头：`x-api-key` 或 `authorization`（默认 `authorization`） |
+| `providers.<name>.extra_body` | 合并到请求体的自定义 JSON 字段 |
+| `providers.<name>.models` | 用于交互式选择的模型列表 |
+
+**环境变量（优先级最高）**
+
+环境变量会覆盖配置文件中的设置，适用于 CI/CD 场景中不便写入配置文件的情况：
 
 ```bash
 export OCR_LLM_URL=https://api.anthropic.com/v1/messages
@@ -199,14 +222,12 @@ export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
 
-同时兼容了 Claude Code 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL`），并解析 `~/.zshrc` / `~/.bashrc` 中的相关导出。
+同时兼容 Claude Code 环境变量（`ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL`），并解析 `~/.zshrc` / `~/.bashrc` 中的相关导出。
 
-> **CC-Switch 用户特别提醒**：如果你使用 [CC-Switch](https://github.com/farion1231/cc-switch) 并开启了[路由服务](https://www.ccswitch.io/zh/docs?section=proxy&item=service)，可以将 `llm.url` 配置成 CC-Switch 启动的代理地址，无需额外配置：
-> - 如果路由的是 **Claude** 供应商：设置 `llm.url` 为 `http://127.0.0.1:15721`
-> - 如果路由的是 **Codex** 供应商：设置 `llm.url` 为 `http://127.0.0.1:15721/v1`
-> - `llm.model` 根据你的供应商设置进行配置
-> - `llm.auth_token` 可以设置成任意值
-> - `extra_body` 设置依然生效
+> **CC-Switch 用户特别提醒**：如果你使用 [CC-Switch](https://github.com/farion1231/cc-switch) 并开启了[路由服务](https://www.ccswitch.io/zh/docs?section=proxy&item=service)，可以将供应商的 `url` 配置成 CC-Switch 启动的代理地址，无需额外配置：
+> - 路由 **Claude** 供应商：`providers.anthropic.url` 设为 `http://127.0.0.1:15721`
+> - 路由 **Codex** 供应商：对应供应商的 `url` 设为 `http://127.0.0.1:15721/v1`
+> - `api_key` 可设置为任意值，`extra_body` 设置依然生效
 
 **2. 测试连通性**
 

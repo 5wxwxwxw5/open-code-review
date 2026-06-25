@@ -162,6 +162,8 @@ sudo cp dist/opencodereview /usr/local/bin/ocr
 
 **코드 리뷰를 실행하기 전에 반드시 LLM을 설정해야 합니다.**
 
+OCR은 통합 **Provider** 시스템으로 LLM 설정을 관리합니다. 다양한 주요 provider가 내장되어 있으며, 프라이빗 배포 또는 기타 호환 엔드포인트에 연결하기 위한 커스텀 provider 추가도 지원합니다. 설정은 `~/.opencodereview/config.json`에 저장됩니다.
+
 **Option A: 대화형 설정 (권장)**
 
 ```bash
@@ -171,26 +173,47 @@ ocr config model             # 활성 provider의 model 선택
 
 ![Provider setup](imgs/providers.jpg)
 
-**Option B: 수동 설정**
+대화형 UI가 provider 선택, API key 입력, model 설정을 안내하며, 완료 후 자동으로 연결 테스트를 수행합니다.
+
+`ocr llm providers`를 실행하면 모든 built-in provider를 확인할 수 있습니다. Built-in provider에는 API URL과 프로토콜이 사전 설정되어 있어 API key만 제공하면 바로 사용할 수 있습니다. 해당 환경 변수(예: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)가 이미 설정되어 있으면 API key가 자동으로 읽힙니다.
+
+**커스텀 provider**도 대화형 UI에서 추가할 수 있습니다 — provider 이름, API URL, 프로토콜 타입(`anthropic` 또는 `openai`), API key를 입력합니다.
+
+**Option B: CLI 설정 (CI/CD 등 비대화형 환경용)**
+
+`ocr config set` 명령으로 provider 설정을 직접 작성합니다. 스크립트 및 자동화에 적합합니다.
+
+Built-in provider 사용:
 
 ```bash
-ocr config set llm.url https://api.anthropic.com/v1/messages
-ocr config set llm.auth_token your-api-key-here
-ocr config set llm.model claude-opus-4-6
-ocr config set llm.use_anthropic true
+ocr config set provider anthropic
+ocr config set providers.anthropic.api_key your-api-key-here
+ocr config set providers.anthropic.model claude-sonnet-4-6
 ```
 
-config는 `~/.opencodereview/config.json`에 저장됩니다.
-
-**`auth_header` (선택사항):** Anthropic 사용 시 API key를 전송할 HTTP header를 제어합니다. 생략하면 기본값은 `authorization` (Bearer token)입니다. 표준 `sk-ant-*` API key를 사용하는 경우 `x-api-key`로 설정해야 합니다:
+커스텀 provider 사용 (프라이빗 게이트웨이 또는 기타 호환 엔드포인트):
 
 ```bash
-ocr config set llm.auth_header x-api-key
+ocr config set provider my-gateway
+ocr config set custom_providers.my-gateway.url https://my-llm-gateway.internal/v1
+ocr config set custom_providers.my-gateway.protocol openai
+ocr config set custom_providers.my-gateway.api_key your-api-key-here
+ocr config set custom_providers.my-gateway.model gpt-4o
 ```
 
-지원되는 값: `x-api-key`, `authorization` (별칭: `bearer`). 그 외 값은 오류로 처리됩니다.
+> 커스텀 provider에서는 `url`과 `protocol`이 필수입니다. 지원 프로토콜: `anthropic`, `openai`.
 
-**Option C: 환경 변수(가장 높은 우선순위)**
+선택 설정:
+
+| 키 | 설명 |
+|----|------|
+| `providers.<name>.auth_header` | 인증 header: `x-api-key` 또는 `authorization` (기본값: `authorization`) |
+| `providers.<name>.extra_body` | 요청 body에 병합되는 커스텀 JSON 필드 |
+| `providers.<name>.models` | 대화형 선택용 model 목록 |
+
+**환경 변수 (가장 높은 우선순위)**
+
+환경 변수는 설정 파일의 값을 덮어씁니다. 설정 파일 작성이 불편한 CI/CD 시나리오에 적합합니다:
 
 ```bash
 export OCR_LLM_URL=https://api.anthropic.com/v1/messages
@@ -201,12 +224,10 @@ export OCR_USE_ANTHROPIC=true
 
 Claude Code 환경 변수(`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`)와도 호환되며, `~/.zshrc` / `~/.bashrc`의 export도 파싱합니다.
 
-> **CC-Switch 사용자 참고**: [CC-Switch](https://github.com/farion1231/cc-switch)를 [routing service](https://www.ccswitch.io/en/docs?section=proxy&item=service)와 함께 사용한다면, 추가 설정 없이 `llm.url`을 CC-Switch proxy 주소로 지정할 수 있습니다.
-> - **Claude** provider: `llm.url`을 `http://127.0.0.1:15721`로 설정
-> - **Codex** provider: `llm.url`을 `http://127.0.0.1:15721/v1`로 설정
-> - provider 설정에 맞게 `llm.model` 설정
-> - `llm.auth_token`은 아무 값이나 사용할 수 있음
-> - `extra_body` 설정은 그대로 적용됨
+> **CC-Switch 사용자 참고**: [CC-Switch](https://github.com/farion1231/cc-switch)를 [routing service](https://www.ccswitch.io/en/docs?section=proxy&item=service)와 함께 사용한다면, provider의 `url`을 CC-Switch proxy 주소로 지정하여 추가 설정 없이 사용할 수 있습니다:
+> - **Claude** provider: `providers.anthropic.url`을 `http://127.0.0.1:15721`로 설정
+> - **Codex** provider: 해당 provider의 `url`을 `http://127.0.0.1:15721/v1`로 설정
+> - `api_key`는 아무 값이나 사용 가능, `extra_body` 설정은 그대로 적용됨
 
 **2. 연결 테스트**
 
