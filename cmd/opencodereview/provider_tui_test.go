@@ -1242,3 +1242,54 @@ func TestApplyCustomProviderConfigPreservesModelOrder(t *testing.T) {
 		t.Errorf("entry.Model = %q, want test-model-3", cfg.CustomProviders["test-provider"].Model)
 	}
 }
+
+func TestApplyManualConfigNormalizesAuthHeader(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{}
+
+	result := providerTUIResult{
+		isManual:   true,
+		url:        "https://example.com/v1",
+		model:      "test-model",
+		apiKey:     "token",
+		protocol:   "anthropic",
+		authHeader: "X-Api-Key",
+	}
+	if err := applyManualConfig(configPath, cfg, result); err != nil {
+		t.Fatalf("applyManualConfig: %v", err)
+	}
+	if got := cfg.Llm.AuthHeader; got != "x-api-key" {
+		t.Errorf("Llm.AuthHeader = %q, want %q", got, "x-api-key")
+	}
+	useAnthropic := true
+	if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic != useAnthropic {
+		t.Errorf("UseAnthropic = %v, want %v", cfg.Llm.UseAnthropic, useAnthropic)
+	}
+}
+
+func TestApplyCustomProviderConfigNormalizesAuthHeader(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		CustomProviders: map[string]ProviderEntry{
+			"test-provider": {URL: "https://example.com", Model: "m"},
+		},
+	}
+
+	result := providerTUIResult{
+		provider:   "test-provider",
+		model:      "m",
+		url:        "https://example.com",
+		protocol:   "anthropic",
+		authHeader: "Authorization",
+		isCustom:   true,
+		isEdit:     true,
+	}
+	if err := applyCustomProviderConfig(configPath, cfg, result); err != nil {
+		t.Fatalf("applyCustomProviderConfig: %v", err)
+	}
+	if got := cfg.CustomProviders["test-provider"].AuthHeader; got != "authorization" {
+		t.Errorf("AuthHeader = %q, want %q", got, "authorization")
+	}
+}

@@ -102,14 +102,13 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 	cfg.Llm.URL = result.url
 	cfg.Llm.Model = result.model
 	cfg.Llm.AuthToken = result.apiKey
-	cfg.Llm.AuthHeader = result.authHeader
-	if result.protocol == "anthropic" {
-		useAnthropic := true
-		cfg.Llm.UseAnthropic = &useAnthropic
-	} else {
-		useAnthropic := false
-		cfg.Llm.UseAnthropic = &useAnthropic
+	authHeader, err := llm.NormalizeAuthHeader(result.authHeader)
+	if err != nil {
+		return fmt.Errorf("invalid auth_header: %w", err)
 	}
+	cfg.Llm.AuthHeader = authHeader
+	useAnthropic := result.protocol == "anthropic"
+	cfg.Llm.UseAnthropic = &useAnthropic
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -155,7 +154,11 @@ func applyCustomProviderConfig(configPath string, cfg *Config, result providerTU
 		entry.Protocol = result.protocol
 	}
 	if result.authHeader != "" {
-		entry.AuthHeader = result.authHeader
+		authHeader, err := llm.NormalizeAuthHeader(result.authHeader)
+		if err != nil {
+			return fmt.Errorf("invalid auth_header: %w", err)
+		}
+		entry.AuthHeader = authHeader
 	}
 	if result.apiKey != "" {
 		entry.APIKey = result.apiKey
