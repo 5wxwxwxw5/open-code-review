@@ -340,10 +340,10 @@ func (m providerTUIModel) models() []string {
 				models = mergeModelLists(models, entry.Models)
 			}
 		}
-		return sortModelsByName(models)
+		return models
 	case tabCustom:
 		if cp, ok := m.selectedCustomProvider(); ok {
-			return sortModelsByName(cp.entry.Models)
+			return cp.entry.Models
 		}
 	}
 	return nil
@@ -968,8 +968,9 @@ func (m *providerTUIModel) applyEditCustomProviderSave() error {
 		entry.Model = r.model
 	}
 	if len(r.models) > 0 {
-		entry.Models = mergeModelLists([]string{r.model}, r.models)
+		entry.Models = append([]string(nil), r.models...)
 	}
+	entry.Models = ensureModelInList(entry.Models, r.model)
 	// Optional fields are always applied so users can intentionally clear them.
 	// To detect "user cleared the API key" vs "user left it masked/untouched",
 	// apiKey is only overwritten when the user actively typed something.
@@ -1546,7 +1547,7 @@ func (m providerTUIModel) result() providerTUIResult {
 			return providerTUIResult{
 				provider:   cp.name,
 				model:      model,
-				models:     mergeModelLists([]string{model}, cp.entry.Models),
+				models:     append([]string(nil), cp.entry.Models...),
 				apiKey:     apiKey,
 				isCustom:   true,
 				url:        cp.entry.URL,
@@ -1993,7 +1994,7 @@ func newModelTUI(provider llm.Provider, currentModel string) modelTUIModel {
 
 	m := modelTUIModel{
 		provider:    provider,
-		models:      sortModelsByName(provider.Models),
+		models:      provider.Models,
 		width:       80,
 		height:      24,
 		modelInput:  mi,

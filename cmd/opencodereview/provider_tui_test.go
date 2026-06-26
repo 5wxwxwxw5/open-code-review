@@ -643,6 +643,44 @@ func TestProviderTUI_CustomFormEditRejectsInvalidAuthHeader(t *testing.T) {
 	}
 }
 
+func TestProviderTUI_EditCustomProviderSaveRejectsDuplicateRename(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				URL:      "https://stepfun.example.com",
+				Protocol: "anthropic",
+			},
+			"other": {
+				URL:      "https://other.example.com",
+				Protocol: "openai",
+			},
+		},
+	}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabCustom
+	m.editingCustom = true
+	m.editTargetName = "other"
+	m.cpProtocolIdx = 1 // openai
+	m.cpNameInput.SetValue("stepfun")
+	m.cpURLInput.SetValue("https://other.example.com")
+
+	err := m.applyEditCustomProviderSave()
+	if err == nil {
+		t.Fatal("expected error when renaming to existing provider name")
+	}
+	if !strings.Contains(m.formError, "stepfun") {
+		t.Errorf("formError = %q, want to mention stepfun", m.formError)
+	}
+	if _, ok := cfg.CustomProviders["other"]; !ok {
+		t.Error("original provider 'other' should still exist")
+	}
+	if cfg.CustomProviders["other"].URL != "https://other.example.com" {
+		t.Errorf("provider 'other' URL = %q, want unchanged", cfg.CustomProviders["other"].URL)
+	}
+}
+
 func TestProviderTUI_CustomFormCreateReturnsToModelList(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
@@ -743,8 +781,8 @@ func TestProviderTUI_SelectExistingCustomGoesToModel(t *testing.T) {
 		t.Errorf("step = %d, want %d (stepModel)", m2.step, stepModel)
 	}
 	gotModels := m2.models()
-	if len(gotModels) != 2 || gotModels[0] != "custom-fast" || gotModels[1] != "custom-model" {
-		t.Errorf("models = %v, want [custom-fast custom-model] (sorted)", gotModels)
+	if len(gotModels) != 2 || gotModels[0] != "custom-model" || gotModels[1] != "custom-fast" {
+		t.Errorf("models = %v, want [custom-model custom-fast] (config order)", gotModels)
 	}
 }
 
@@ -1159,5 +1197,48 @@ func TestProviderTUI_DeleteModelPreservesActiveModel(t *testing.T) {
 	}
 	if !m2.savedInSession {
 		t.Error("savedInSession should be true after deleting a model")
+	}
+}
+
+func TestApplyCustomProviderConfigPreservesModelOrder(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	models := []string{"test-model", "test-model-2", "bbb", "aaa", "test-model-3"}
+	cfg := &Config{
+		Provider: "test-provider",
+		Model:    "test-model-2",
+		CustomProviders: map[string]ProviderEntry{
+			"test-provider": {
+				Model:  "test-model-2",
+				Models: append([]string(nil), models...),
+			},
+		},
+	}
+	if err := saveConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+
+	result := providerTUIResult{
+		provider: "test-provider",
+		model:    "test-model-3",
+		models:   append([]string(nil), models...),
+		isCustom: true,
+		isEdit:   true,
+	}
+	if err := applyCustomProviderConfig(configPath, cfg, result); err != nil {
+		t.Fatalf("applyCustomProviderConfig: %v", err)
+	}
+
+	got := cfg.CustomProviders["test-provider"].Models
+	if len(got) != len(models) {
+		t.Fatalf("Models length = %d, want %d: %v", len(got), len(models), got)
+	}
+	for i := range models {
+		if got[i] != models[i] {
+			t.Errorf("Models[%d] = %q, want %q", i, got[i], models[i])
+		}
+	}
+	if cfg.CustomProviders["test-provider"].Model != "test-model-3" {
+		t.Errorf("entry.Model = %q, want test-model-3", cfg.CustomProviders["test-provider"].Model)
 	}
 }

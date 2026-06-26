@@ -145,8 +145,9 @@ func applyCustomProviderConfig(configPath string, cfg *Config, result providerTU
 	entry := cfg.CustomProviders[result.provider]
 	entry.Model = result.model
 	if len(result.models) > 0 {
-		entry.Models = mergeModelLists([]string{result.model}, result.models)
+		entry.Models = append([]string(nil), result.models...)
 	}
+	entry.Models = ensureModelInList(entry.Models, result.model)
 	if result.url != "" {
 		entry.URL = result.url
 	}
@@ -313,7 +314,7 @@ func runConfigModel() error {
 		}
 		entry := cfg.CustomProviders[cfg.Provider]
 		entry.Model = selectedModel
-		entry.Models = mergeModelLists([]string{selectedModel}, entry.Models)
+		entry.Models = ensureModelInList(entry.Models, selectedModel)
 		cfg.CustomProviders[cfg.Provider] = entry
 	} else {
 		if cfg.Providers == nil {
@@ -322,7 +323,7 @@ func runConfigModel() error {
 		entry := cfg.Providers[cfg.Provider]
 		entry.Model = selectedModel
 		if !modelListContains(provider.Models, selectedModel) {
-			entry.Models = mergeModelLists([]string{selectedModel}, entry.Models)
+			entry.Models = ensureModelInList(entry.Models, selectedModel)
 		}
 		cfg.Providers[cfg.Provider] = entry
 	}

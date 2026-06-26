@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -381,22 +380,6 @@ func activeModelForProvider(cfg *Config, providerName string, entry ProviderEntr
 	return ""
 }
 
-func sortModelsByName(models []string) []string {
-	if len(models) < 2 {
-		return models
-	}
-	sorted := append([]string(nil), models...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		left := strings.ToLower(sorted[i])
-		right := strings.ToLower(sorted[j])
-		if left == right {
-			return sorted[i] < sorted[j]
-		}
-		return left < right
-	})
-	return sorted
-}
-
 func normalizeModelList(models []string) []string {
 	out := make([]string, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
@@ -420,6 +403,19 @@ func mergeModelLists(lists ...[]string) []string {
 		merged = append(merged, list...)
 	}
 	return normalizeModelList(merged)
+}
+
+// ensureModelInList appends model to the end when missing; never reorders existing entries.
+func ensureModelInList(models []string, model string) []string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return models
+	}
+	if modelListContains(models, model) {
+		return models
+	}
+	out := append([]string(nil), models...)
+	return append(out, model)
 }
 
 func modelListContains(models []string, target string) bool {
