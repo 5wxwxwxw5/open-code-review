@@ -90,20 +90,20 @@ type providerTUIModel struct {
 	editTargetName  string
 	cpStep          customProviderStep
 	cpProtocolIdx   int
-	cpNameInput   textinput.Model
-	cpURLInput    textinput.Model
-	cpAuthInput   textinput.Model
+	cpNameInput     textinput.Model
+	cpURLInput      textinput.Model
+	cpAuthInput     textinput.Model
 
 	// --- tab: manual ---
-	inManualForm        bool
-	manualStep             manualStep
-	manualProtocolIdx      int
-	manualURLInput         textinput.Model
-	manualModelInput       textinput.Model
-	manualAuthHeaderInput  textinput.Model
-	manualTokenInput       textinput.Model
-	manualTokenMasked      bool
-	manualTokenOriginal    string
+	inManualForm          bool
+	manualStep            manualStep
+	manualProtocolIdx     int
+	manualURLInput        textinput.Model
+	manualModelInput      textinput.Model
+	manualAuthHeaderInput textinput.Model
+	manualTokenInput      textinput.Model
+	manualTokenMasked     bool
+	manualTokenOriginal   string
 
 	// --- shared model/api-key steps (official + existing custom) ---
 	modelIdx    int
@@ -158,7 +158,7 @@ func collectCustomProviders(cfg *Config) []customProviderListItem {
 	return out
 }
 
-func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
+func newProviderTUI(cfg *Config, configPath string) providerTUIModel {
 	providers := llm.ListProviders()
 	sort.SliceStable(providers, func(i, j int) bool {
 		left := strings.ToLower(providers[i].DisplayName)
@@ -210,22 +210,22 @@ func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
 	manualToken.EchoCharacter = '*'
 
 	m := providerTUIModel{
-		providers:            providers,
-		existingCfg:          cfg,
-		modelInput:           mi,
-		apiKeyInput:          ai,
-		cpNameInput:          cpName,
-		cpURLInput:           cpURL,
-		cpAuthInput:          cpAuth,
-		manualURLInput:       manualURL,
-		manualModelInput:     manualModel,
+		providers:             providers,
+		existingCfg:           cfg,
+		modelInput:            mi,
+		apiKeyInput:           ai,
+		cpNameInput:           cpName,
+		cpURLInput:            cpURL,
+		cpAuthInput:           cpAuth,
+		manualURLInput:        manualURL,
+		manualModelInput:      manualModel,
 		manualAuthHeaderInput: manualAuthHeader,
-		manualTokenInput:     manualToken,
-		width:            80,
-		height:           24,
-		activeTab:        tabOfficial,
-		customProviders:  collectCustomProviders(cfg),
-		configPath:       configPathFromArgs(configPath),
+		manualTokenInput:      manualToken,
+		width:                 80,
+		height:                24,
+		activeTab:             tabOfficial,
+		customProviders:       collectCustomProviders(cfg),
+		configPath:            configPath,
 	}
 
 	providerFound := false
@@ -420,7 +420,7 @@ func (m *providerTUIModel) syncSessionModelSelection() error {
 
 	if m.configPath != "" {
 		if err := saveConfig(m.configPath, m.existingCfg); err != nil {
-			return fmt.Errorf("Failed to save: %w", err)
+			return fmt.Errorf("failed to save: %w", err)
 		}
 	}
 	m.savedInSession = true
@@ -845,11 +845,11 @@ func (m providerTUIModel) handleCustomFormEnter() (tea.Model, tea.Cmd) {
 
 func (m providerTUIModel) applyCreateCustomProvider() (tea.Model, tea.Cmd) {
 	if m.existingCfg == nil {
-		m.formError = "Failed to save: config not loaded"
+		m.formError = "failed to save: config not loaded"
 		return m, nil
 	}
 	if m.configPath == "" {
-		m.formError = "Failed to save: config path not available"
+		m.formError = "failed to save: config path not available"
 		return m, nil
 	}
 	r := m.result()
@@ -879,7 +879,7 @@ func (m providerTUIModel) applyCreateCustomProvider() (tea.Model, tea.Cmd) {
 	m.existingCfg.CustomProviders[r.provider] = entry
 
 	if err := saveConfig(m.configPath, m.existingCfg); err != nil {
-		m.formError = fmt.Sprintf("Failed to save: %v", err)
+		m.formError = fmt.Sprintf("failed to save: %v", err)
 		return m, nil
 	}
 
@@ -947,11 +947,11 @@ func cloneCustomProviderList(src []customProviderListItem) []customProviderListI
 
 func (m *providerTUIModel) applyEditCustomProviderSave() error {
 	if m.existingCfg == nil {
-		m.formError = "Failed to save: config not loaded"
+		m.formError = "failed to save: config not loaded"
 		return fmt.Errorf("config not loaded")
 	}
 	if m.configPath == "" {
-		m.formError = "Failed to save: config path not available"
+		m.formError = "failed to save: config path not available"
 		return fmt.Errorf("config path not available")
 	}
 	r := m.result()
@@ -995,7 +995,7 @@ func (m *providerTUIModel) applyEditCustomProviderSave() error {
 	m.existingCfg.CustomProviders[r.provider] = entry
 
 	if err := saveConfig(m.configPath, m.existingCfg); err != nil {
-		m.formError = fmt.Sprintf("Failed to save: %v", err)
+		m.formError = fmt.Sprintf("failed to save: %v", err)
 		if reloaded, reloadErr := loadOrCreateConfig(m.configPath); reloadErr == nil {
 			m.existingCfg = reloaded
 			m.customProviders = collectCustomProviders(reloaded)
@@ -1165,7 +1165,7 @@ func (m providerTUIModel) updateDeleteConfirm(key string) (tea.Model, tea.Cmd) {
 						m.existingCfg = reloaded
 						m.customProviders = collectCustomProviders(reloaded)
 					}
-					m.formError = fmt.Sprintf("Failed to save: %v", err)
+					m.formError = fmt.Sprintf("failed to save: %v", err)
 					m.confirmingDelete = false
 					return m, nil
 				}
@@ -1215,7 +1215,7 @@ func (m providerTUIModel) updateDeleteModelConfirm(key string) (tea.Model, tea.C
 						m.existingCfg = reloaded
 						m.customProviders = collectCustomProviders(reloaded)
 					}
-					m.formError = fmt.Sprintf("Failed to save: %v", err)
+					m.formError = fmt.Sprintf("failed to save: %v", err)
 					m.confirmingDeleteModel = false
 					return m, nil
 				}
@@ -1442,13 +1442,6 @@ func (m providerTUIModel) handleDown() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-func configPathFromArgs(args []string) string {
-	if len(args) > 0 {
-		return args[0]
-	}
-	return ""
 }
 
 func (m *providerTUIModel) loadExistingAPIKey() {

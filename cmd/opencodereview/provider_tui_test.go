@@ -41,7 +41,7 @@ func charKey(c rune) tea.KeyPressMsg {
 // --- Tab switching tests ---
 
 func TestProviderTUI_TabSwitchRight(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 	if m.activeTab != tabOfficial {
 		t.Fatalf("initial tab = %d, want %d", m.activeTab, tabOfficial)
 	}
@@ -67,7 +67,7 @@ func TestProviderTUI_TabSwitchRight(t *testing.T) {
 }
 
 func TestProviderTUI_TabSwitchLeft(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Go to manual tab first
 	result, _ := m.Update(rightKey())
@@ -99,7 +99,7 @@ func TestProviderTUI_TabSwitchLeft(t *testing.T) {
 }
 
 func TestProviderTUI_TabKeyCycles(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	result, _ := m.Update(tabKeyMsg())
 	m2 := result.(providerTUIModel)
@@ -121,7 +121,7 @@ func TestProviderTUI_TabKeyCycles(t *testing.T) {
 }
 
 func TestProviderTUI_TabSwitchOnlyOnStepProvider(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Advance to stepModel
 	result, _ := m.Update(enterKey())
@@ -141,7 +141,7 @@ func TestProviderTUI_TabSwitchOnlyOnStepProvider(t *testing.T) {
 // --- Official tab tests (updated from original) ---
 
 func TestProviderTUI_OfficialProvidersSortedByDisplayName(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	displayNames := make([]string, len(m.providers))
 	normalized := make([]string, len(m.providers))
@@ -156,7 +156,7 @@ func TestProviderTUI_OfficialProvidersSortedByDisplayName(t *testing.T) {
 }
 
 func TestProviderTUI_EscFromModelGoesBackToProvider(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	result, _ := m.Update(enterKey())
 	m2 := result.(providerTUIModel)
@@ -175,7 +175,7 @@ func TestProviderTUI_EscFromModelGoesBackToProvider(t *testing.T) {
 }
 
 func TestProviderTUI_EscFromAPIKeyGoesBackToModel(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	result, _ := m.Update(enterKey())
 	m2 := result.(providerTUIModel)
@@ -194,7 +194,7 @@ func TestProviderTUI_EscFromAPIKeyGoesBackToModel(t *testing.T) {
 }
 
 func TestProviderTUI_EscFromProviderCancels(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	result, cmd := m.Update(escKey())
 	m2 := result.(providerTUIModel)
@@ -216,7 +216,7 @@ func TestProviderTUI_EscKeyString(t *testing.T) {
 // --- Manual tab tests ---
 
 func TestProviderTUI_ManualTabEnterStartsForm(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Switch to manual tab
 	result, _ := m.Update(rightKey())
@@ -239,7 +239,7 @@ func TestProviderTUI_ManualTabEnterStartsForm(t *testing.T) {
 }
 
 func TestProviderTUI_ManualFormEscFromURLExitsForm(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Switch to manual tab and enter form
 	result, _ := m.Update(rightKey())
@@ -271,7 +271,7 @@ func TestProviderTUI_ManualFormEscRestoresOriginalValues(t *testing.T) {
 			AuthToken: "token-123",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Enter the form
 	result, _ := m.Update(enterKey())
@@ -311,7 +311,7 @@ func TestProviderTUI_ManualFormPrefilledValues(t *testing.T) {
 			AuthToken: "token-123",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	if m.activeTab != tabManual {
 		t.Fatalf("should auto-select manual tab when Llm.URL is set, got %d", m.activeTab)
@@ -341,7 +341,7 @@ func TestProviderTUI_ManualResult(t *testing.T) {
 			AuthToken: "token-123",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Enter the form
 	result, _ := m.Update(enterKey())
@@ -372,7 +372,7 @@ func TestProviderTUI_ManualFormPrefilledWhenProviderSet(t *testing.T) {
 			AuthToken: "manual-token",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	if m.activeTab != tabCustom {
 		t.Fatalf("should auto-select custom tab, got %d", m.activeTab)
@@ -400,7 +400,7 @@ func TestProviderTUI_ManualFormPrefillsAuthHeader(t *testing.T) {
 			AuthHeader: "X-Custom-Auth",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	if got := m.manualAuthHeaderInput.Value(); got != "X-Custom-Auth" {
 		t.Errorf("manualAuthHeaderInput not prefilled: got %q, want %q", got, "X-Custom-Auth")
@@ -415,7 +415,7 @@ func TestProviderTUI_ManualFormSkipsEmptyTokenWhenOriginalExists(t *testing.T) {
 			AuthToken: "token-123",
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 	m.inManualForm = true
 	m.manualStep = manualStepAuthToken
 	m.manualTokenOriginal = "token-123"
@@ -437,7 +437,7 @@ func TestProviderTUI_ManualFormSkipsEmptyTokenWhenOriginalExists(t *testing.T) {
 }
 
 func TestProviderTUI_ManualFormRequiresTokenOnFirstSetup(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 	m.inManualForm = true
 	m.manualStep = manualStepAuthToken
 	m.manualTokenInput.SetValue("")
@@ -453,7 +453,7 @@ func TestProviderTUI_ManualFormRequiresTokenOnFirstSetup(t *testing.T) {
 // --- Custom tab tests ---
 
 func TestProviderTUI_CustomTabShowsAddOption(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Switch to custom tab
 	result, _ := m.Update(rightKey())
@@ -469,7 +469,7 @@ func TestProviderTUI_CustomTabShowsAddOption(t *testing.T) {
 }
 
 func TestProviderTUI_CustomTabSelectAddStartsForm(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Switch to custom tab
 	result, _ := m.Update(rightKey())
@@ -487,7 +487,7 @@ func TestProviderTUI_CustomTabSelectAddStartsForm(t *testing.T) {
 }
 
 func TestProviderTUI_CustomFormEscFromNameExitsForm(t *testing.T) {
-	m := newProviderTUI(&Config{})
+	m := newProviderTUI(&Config{}, "")
 
 	// Switch to custom tab and start form
 	result, _ := m.Update(rightKey())
@@ -516,7 +516,7 @@ func TestProviderTUI_CustomFormRejectsDuplicateName(t *testing.T) {
 			"stepfun": {Model: "xxx"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	result, _ := m.Update(downKey())
 	m2 := result.(providerTUIModel)
@@ -746,7 +746,7 @@ func TestProviderTUI_CustomProviderExistsInList(t *testing.T) {
 			},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	if m.activeTab != tabCustom {
 		t.Fatalf("should auto-select custom tab, got %d", m.activeTab)
@@ -772,7 +772,7 @@ func TestProviderTUI_SelectExistingCustomGoesToModel(t *testing.T) {
 			},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Enter on existing custom provider should go to model selection first.
 	result, _ := m.Update(enterKey())
@@ -854,7 +854,7 @@ func TestProviderTUI_DeleteCustomProvider(t *testing.T) {
 			"my-llm": {URL: "https://custom.api/v1", Protocol: "openai", Model: "custom-model"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Switch to custom tab
 	result, _ := m.Update(rightKey())
@@ -894,7 +894,7 @@ func TestProviderTUI_DeleteCustomProviderCancel(t *testing.T) {
 			"my-llm": {URL: "https://custom.api/v1", Protocol: "openai", Model: "custom-model"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Force custom tab so this test is independent of init-time tab routing.
 	// Switch to custom tab, select provider, press d
@@ -927,7 +927,7 @@ func TestProviderTUI_DeleteOnAddOptionIgnored(t *testing.T) {
 			"my-llm": {URL: "https://custom.api/v1", Protocol: "openai"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Switch to custom tab
 	result, _ := m.Update(rightKey())
@@ -949,7 +949,7 @@ func TestProviderTUI_DeleteActiveCustomProvider(t *testing.T) {
 			"my-llm": {URL: "https://custom.api/v1", Protocol: "openai", Model: "custom-model"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	// Should auto-select custom tab with active provider
 	if m.activeTab != tabCustom {
@@ -978,7 +978,7 @@ func TestProviderTUI_DeleteEscCancels(t *testing.T) {
 			"my-llm": {URL: "https://custom.api/v1", Protocol: "openai"},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 
 	result, _ := m.Update(rightKey())
 	m2 := result.(providerTUIModel)
@@ -1178,7 +1178,7 @@ func TestProviderTUI_DeleteModelPreservesActiveModel(t *testing.T) {
 			},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, "")
 	m.activeTab = tabCustom
 	m.customIdx = 0
 	m.step = stepModel
