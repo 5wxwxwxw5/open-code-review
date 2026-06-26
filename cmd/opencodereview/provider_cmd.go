@@ -139,6 +139,7 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 	cfg.Llm.URL = result.url
 	cfg.Llm.Model = result.model
 	cfg.Llm.AuthToken = result.apiKey
+	cfg.Llm.AuthHeader = result.authHeader
 	if result.protocol == "anthropic" {
 		useAnthropic := true
 		cfg.Llm.UseAnthropic = &useAnthropic

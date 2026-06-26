@@ -35,7 +35,7 @@ func tabKeyMsg() tea.KeyPressMsg {
 }
 
 func charKey(c rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg{Code: c}
+	return tea.KeyPressMsg{Code: c, Text: string(c)}
 }
 
 // --- Tab switching tests ---
@@ -391,6 +391,65 @@ func TestProviderTUI_ManualFormPrefilledWhenProviderSet(t *testing.T) {
 	}
 }
 
+func TestProviderTUI_ManualFormPrefillsAuthHeader(t *testing.T) {
+	cfg := &Config{
+		Llm: LlmConfig{
+			URL:        "https://manual.example.com/v1",
+			Model:      "manual-model",
+			AuthToken:  "manual-token",
+			AuthHeader: "X-Custom-Auth",
+		},
+	}
+	m := newProviderTUI(cfg)
+
+	if got := m.manualAuthHeaderInput.Value(); got != "X-Custom-Auth" {
+		t.Errorf("manualAuthHeaderInput not prefilled: got %q, want %q", got, "X-Custom-Auth")
+	}
+}
+
+func TestProviderTUI_ManualFormSkipsEmptyTokenWhenOriginalExists(t *testing.T) {
+	cfg := &Config{
+		Llm: LlmConfig{
+			URL:       "https://example.com/v1",
+			Model:     "test-model",
+			AuthToken: "token-123",
+		},
+	}
+	m := newProviderTUI(cfg)
+	m.inManualForm = true
+	m.manualStep = manualStepAuthToken
+	m.manualTokenOriginal = "token-123"
+	m.manualTokenMasked = false
+	m.manualTokenInput.SetValue("")
+	m.manualTokenInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+	if m2.manualStep != manualStepAuthHeader {
+		t.Errorf("manualStep = %d, want %d", m2.manualStep, manualStepAuthHeader)
+	}
+
+	m2.confirmed = true
+	r := m2.result()
+	if r.apiKey != "token-123" {
+		t.Errorf("result apiKey = %q, want %q", r.apiKey, "token-123")
+	}
+}
+
+func TestProviderTUI_ManualFormRequiresTokenOnFirstSetup(t *testing.T) {
+	m := newProviderTUI(&Config{})
+	m.inManualForm = true
+	m.manualStep = manualStepAuthToken
+	m.manualTokenInput.SetValue("")
+	m.manualTokenInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+	if m2.manualStep != manualStepAuthToken {
+		t.Errorf("should stay on auth token step, got %d", m2.manualStep)
+	}
+}
+
 // --- Custom tab tests ---
 
 func TestProviderTUI_CustomTabShowsAddOption(t *testing.T) {
@@ -483,8 +542,8 @@ func TestProviderTUI_CustomFormRejectsDuplicateName(t *testing.T) {
 
 	result, _ = m4.Update(charKey('x'))
 	m4b := result.(providerTUIModel)
-	if m4b.formError == "" {
-		t.Error("formError should persist while typing")
+	if m4b.formError != "" {
+		t.Errorf("formError should clear on keystroke, got %q", m4b.formError)
 	}
 
 	m4b.cpNameInput.SetValue("stepfun2")
@@ -495,6 +554,92 @@ func TestProviderTUI_CustomFormRejectsDuplicateName(t *testing.T) {
 	}
 	if m5.formError != "" {
 		t.Errorf("formError = %q, want empty after valid name", m5.formError)
+	}
+}
+
+func TestProviderTUI_CustomFormRejectsInvalidAuthHeader(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{}
+	m := newProviderTUI(cfg, configPath)
+
+	result, _ := m.Update(rightKey())
+	m2 := result.(providerTUIModel)
+	result, _ = m2.Update(enterKey())
+	m3 := result.(providerTUIModel)
+
+	m3.cpNameInput.SetValue("my-new")
+	result, _ = m3.Update(enterKey())
+	m4 := result.(providerTUIModel)
+	result, _ = m4.Update(enterKey())
+	m5 := result.(providerTUIModel)
+	m5.cpURLInput.SetValue("https://api.example.com")
+	result, _ = m5.Update(enterKey())
+	m6 := result.(providerTUIModel)
+	result, _ = m6.Update(enterKey())
+	m7 := result.(providerTUIModel)
+	if m7.cpStep != cpStepAuthHeader {
+		t.Fatalf("cpStep = %d, want %d", m7.cpStep, cpStepAuthHeader)
+	}
+
+	for _, c := range "bad-header" {
+		result, _ = m7.Update(charKey(c))
+		m7 = result.(providerTUIModel)
+	}
+	result, _ = m7.Update(enterKey())
+	m8 := result.(providerTUIModel)
+
+	if m8.cpStep != cpStepAuthHeader {
+		t.Errorf("cpStep = %d, want %d", m8.cpStep, cpStepAuthHeader)
+	}
+	if m8.formError == "" {
+		t.Error("expected formError for invalid auth header")
+	}
+	if !strings.Contains(m8.formError, "Unsupported Auth Header") {
+		t.Errorf("formError = %q, want unsupported auth header message", m8.formError)
+	}
+	if !m8.creatingCustom {
+		t.Error("creatingCustom should remain true when validation fails")
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		t.Error("config should not be saved for invalid auth header")
+	}
+}
+
+func TestProviderTUI_CustomFormEditRejectsInvalidAuthHeader(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				URL:        "https://api.example.com",
+				Protocol:   "anthropic",
+				AuthHeader: "authorization",
+			},
+		},
+	}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.enterEditCustomProvider()
+	m.cpStep = cpStepAuthHeader
+	m.cpAuthInput.SetValue("bad-header")
+	m.cpAuthInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+
+	if m2.cpStep != cpStepAuthHeader {
+		t.Errorf("cpStep = %d, want %d", m2.cpStep, cpStepAuthHeader)
+	}
+	if m2.formError == "" {
+		t.Error("expected formError for invalid auth header")
+	}
+	if !m2.editingCustom {
+		t.Error("editingCustom should remain true when validation fails")
+	}
+	if got := cfg.CustomProviders["stepfun"].AuthHeader; got != "authorization" {
+		t.Errorf("AuthHeader = %q, want unchanged %q", got, "authorization")
 	}
 }
 
@@ -832,28 +977,159 @@ func TestActiveModelForProvider_FallsBackToCfgModel(t *testing.T) {
 	}
 }
 
-func TestProviderTUI_ModelListActiveModelName(t *testing.T) {
+func TestProviderTUI_CustomModelInput_AddsSingleName(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
 	cfg := &Config{
 		Provider: "stepfun",
 		Model:    "step-3.5-flash",
 		CustomProviders: map[string]ProviderEntry{
 			"stepfun": {
+				URL:    "https://api.stepfun.com/v1",
 				Model:  "step-3.5-flash",
-				Models: []string{"step-3.5-flash", "step-3.7-flash"},
+				Models: []string{"step-3.5-flash"},
 			},
 		},
 	}
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, configPath)
 	m.activeTab = tabCustom
 	m.customIdx = 0
 	m.step = stepModel
+	m.modelIdx = len(m.models()) // land on "Enter custom model name..."
+	m.customModel = true
+	m.modelInput.SetValue("newmodel")
+	m.modelInput.Focus()
 
-	if got := m.modelListActiveModelName(); got != "step-3.5-flash" {
-		t.Errorf("modelListActiveModelName = %q, want step-3.5-flash", got)
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+
+	if m2.customModel {
+		t.Error("customModel should be cleared after Enter")
+	}
+	if m2.formError != "" {
+		t.Errorf("formError = %q, want empty", m2.formError)
+	}
+	got := m2.existingCfg.CustomProviders["stepfun"].Models
+	want := []string{"step-3.5-flash", "newmodel"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Models = %v, want %v", got, want)
+	}
+	if !m2.savedInSession {
+		t.Error("savedInSession should be true after add")
+	}
+
+	diskCfg, err := loadOrCreateConfig(configPath)
+	if err != nil {
+		t.Fatalf("load disk config: %v", err)
+	}
+	diskModels := diskCfg.CustomProviders["stepfun"].Models
+	if len(diskModels) != 2 || diskModels[1] != "newmodel" {
+		t.Errorf("disk Models = %v, want last=step-3.5-flash,newmodel", diskModels)
 	}
 }
 
-func TestProviderTUI_DeleteModelPreservesActiveHighlight(t *testing.T) {
+func TestProviderTUI_CustomModelInput_RejectsDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		Provider: "stepfun",
+		Model:    "step-3.5-flash",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				URL:    "https://api.stepfun.com/v1",
+				Model:  "step-3.5-flash",
+				Models: []string{"step-3.5-flash"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepModel
+	m.modelIdx = len(m.models())
+	m.customModel = true
+	m.modelInput.SetValue("step-3.5-flash")
+	m.modelInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+
+	if !m2.customModel {
+		t.Error("customModel should stay true after duplicate reject")
+	}
+	if m2.formError != "Already in list: step-3.5-flash" {
+		t.Errorf("formError = %q, want %q", m2.formError, "Already in list: step-3.5-flash")
+	}
+	if m2.modelInput.Value() != "step-3.5-flash" {
+		t.Errorf("input should be preserved on dup; got %q", m2.modelInput.Value())
+	}
+	if len(m2.existingCfg.CustomProviders["stepfun"].Models) != 1 {
+		t.Errorf("Models mutated: %v", m2.existingCfg.CustomProviders["stepfun"].Models)
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		t.Errorf("disk file should not exist; duplicate did not persist")
+	}
+	if m2.savedInSession {
+		t.Error("savedInSession should be false after rejected duplicate")
+	}
+}
+
+func TestProviderTUI_ManualFormPassesKToAuthHeaderInput(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{Llm: LlmConfig{URL: "https://example.com/v1", Model: "m", AuthToken: "k"}}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabManual
+	m.inManualForm = true
+	m.manualStep = manualStepAuthHeader
+	m.manualAuthHeaderInput.Focus()
+
+	result, _ := m.Update(charKey('x'))
+	m2 := result.(providerTUIModel)
+	result, _ = m2.Update(charKey('-'))
+	m3 := result.(providerTUIModel)
+	result, _ = m3.Update(charKey('a'))
+	m4 := result.(providerTUIModel)
+	result, _ = m4.Update(charKey('p'))
+	m5 := result.(providerTUIModel)
+	result, _ = m5.Update(charKey('i'))
+	m6 := result.(providerTUIModel)
+	result, _ = m6.Update(charKey('-'))
+	m7 := result.(providerTUIModel)
+	result, _ = m7.Update(charKey('k'))
+	m8 := result.(providerTUIModel)
+	result, _ = m8.Update(charKey('e'))
+	m9 := result.(providerTUIModel)
+	result, _ = m9.Update(charKey('y'))
+	m10 := result.(providerTUIModel)
+
+	if got := m10.manualAuthHeaderInput.Value(); got != "x-api-key" {
+		t.Errorf("manualAuthHeaderInput.Value() = %q, want %q", got, "x-api-key")
+	}
+}
+
+func TestProviderTUI_CustomFormPassesKToAuthHeaderInput(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{}
+	m := newProviderTUI(cfg, configPath)
+	m.creatingCustom = true
+	m.cpStep = cpStepAuthHeader
+	m.cpAuthInput.Focus()
+
+	result, _ := m.Update(charKey('k'))
+	m2 := result.(providerTUIModel)
+	result, _ = m2.Update(charKey('e'))
+	m3 := result.(providerTUIModel)
+	result, _ = m3.Update(charKey('y'))
+	m4 := result.(providerTUIModel)
+
+	if got := m4.cpAuthInput.Value(); got != "key" {
+		t.Errorf("cpAuthInput.Value() = %q, want %q", got, "key")
+	}
+}
+
+func TestProviderTUI_DeleteModelPreservesActiveModel(t *testing.T) {
 	cfg := &Config{
 		Provider: "stepfun",
 		Model:    "step-3.5-flash",
@@ -880,8 +1156,5 @@ func TestProviderTUI_DeleteModelPreservesActiveHighlight(t *testing.T) {
 	}
 	if m2.existingCfg.Model != "step-3.5-flash" {
 		t.Errorf("cfg.Model = %q, want step-3.5-flash", m2.existingCfg.Model)
-	}
-	if got := m2.modelListActiveModelName(); got != "step-3.5-flash" {
-		t.Errorf("modelListActiveModelName = %q, want step-3.5-flash", got)
 	}
 }

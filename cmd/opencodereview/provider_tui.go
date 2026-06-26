@@ -47,6 +47,7 @@ const (
 	manualStepProtocol
 	manualStepModel
 	manualStepAuthToken
+	manualStepAuthHeader
 )
 
 var cpProtocols = []string{"anthropic", "openai"}
@@ -95,13 +96,14 @@ type providerTUIModel struct {
 
 	// --- tab: manual ---
 	inManualForm        bool
-	manualStep          manualStep
-	manualProtocolIdx   int
-	manualURLInput      textinput.Model
-	manualModelInput    textinput.Model
-	manualTokenInput    textinput.Model
-	manualTokenMasked   bool
-	manualTokenOriginal string
+	manualStep             manualStep
+	manualProtocolIdx      int
+	manualURLInput         textinput.Model
+	manualModelInput       textinput.Model
+	manualAuthHeaderInput  textinput.Model
+	manualTokenInput       textinput.Model
+	manualTokenMasked      bool
+	manualTokenOriginal    string
 
 	// --- shared model/api-key steps (official + existing custom) ---
 	modelIdx    int
@@ -169,7 +171,7 @@ func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
 	})
 
 	mi := textinput.New()
-	mi.Placeholder = "model name(s), comma-separated"
+	mi.Placeholder = "enter model name"
 	mi.SetWidth(50)
 
 	ai := textinput.New()
@@ -198,6 +200,10 @@ func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
 	manualModel.Placeholder = "enter model name"
 	manualModel.SetWidth(40)
 
+	manualAuthHeader := textinput.New()
+	manualAuthHeader.Placeholder = "optional, leave empty for default (Authorization)"
+	manualAuthHeader.SetWidth(55)
+
 	manualToken := textinput.New()
 	manualToken.Placeholder = "enter your auth token"
 	manualToken.SetWidth(50)
@@ -205,16 +211,17 @@ func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
 	manualToken.EchoCharacter = '*'
 
 	m := providerTUIModel{
-		providers:        providers,
-		existingCfg:      cfg,
-		modelInput:       mi,
-		apiKeyInput:      ai,
-		cpNameInput:      cpName,
-		cpURLInput:       cpURL,
-		cpAuthInput:      cpAuth,
-		manualURLInput:   manualURL,
-		manualModelInput: manualModel,
-		manualTokenInput: manualToken,
+		providers:            providers,
+		existingCfg:          cfg,
+		modelInput:           mi,
+		apiKeyInput:          ai,
+		cpNameInput:          cpName,
+		cpURLInput:           cpURL,
+		cpAuthInput:          cpAuth,
+		manualURLInput:       manualURL,
+		manualModelInput:     manualModel,
+		manualAuthHeaderInput: manualAuthHeader,
+		manualTokenInput:     manualToken,
 		width:            80,
 		height:           24,
 		activeTab:        tabOfficial,
@@ -272,12 +279,12 @@ func newProviderTUI(cfg *Config, configPath ...string) providerTUIModel {
 	}
 	// Intentionally do not auto-switch activeTab to tabCustom when only custom
 	// providers exist — leave the cursor on Official so users navigate
-	// explicitly via Tab/Right. This also avoids treating custom-only setups
-	// as a hidden "active Manual" highlight via globalConfig().
+	// explicitly via Tab/Right.
 
 	if cfg.Llm.URL != "" {
 		m.manualURLInput.SetValue(cfg.Llm.URL)
 		m.manualModelInput.SetValue(cfg.Llm.Model)
+		m.manualAuthHeaderInput.SetValue(cfg.Llm.AuthHeader)
 		if cfg.Llm.AuthToken != "" {
 			m.manualTokenOriginal = cfg.Llm.AuthToken
 			m.manualTokenMasked = true
@@ -480,6 +487,7 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.step--
+			m.formError = ""
 			return m, nil
 
 		case "enter":
@@ -495,6 +503,7 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.step == stepProvider {
 				if m.activeTab > 0 {
 					m.activeTab--
+					m.formError = ""
 				}
 			}
 			return m, nil
@@ -503,6 +512,7 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.step == stepProvider {
 				if m.activeTab < tabCount-1 {
 					m.activeTab++
+					m.formError = ""
 				}
 			}
 			return m, nil
@@ -510,6 +520,7 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if m.step == stepProvider {
 				m.activeTab = (m.activeTab + 1) % tabCount
+				m.formError = ""
 			}
 			return m, nil
 
@@ -564,31 +575,21 @@ func (m providerTUIModel) updateCustomModelInput(key string, msg tea.KeyPressMsg
 		m.customModel = false
 		m.modelInput.Blur()
 		m.modelInput.SetValue("")
+		m.formError = ""
 		return m, nil
 	case "enter":
-		raw := strings.TrimSpace(m.modelInput.Value())
-		if raw == "" {
+		name := strings.TrimSpace(m.modelInput.Value())
+		if name == "" {
 			return m, nil
 		}
-		// Accept comma-separated model names; trim whitespace and drop empties.
-		parts := strings.Split(raw, ",")
-		models := make([]string, 0, len(parts))
-		seen := make(map[string]struct{}, len(parts))
-		for _, p := range parts {
-			name := strings.TrimSpace(p)
-			if name == "" {
-				continue
+		for _, existing := range m.models() {
+			if existing == name {
+				m.formError = fmt.Sprintf("Already in list: %s", name)
+				return m, nil
 			}
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			models = append(models, name)
 		}
-		if len(models) == 0 {
-			return m, nil
-		}
-		if err := m.addCustomModelsToSession(models); err != nil {
+		m.formError = ""
+		if err := m.addCustomModelToSession(name); err != nil {
 			m.formError = err.Error()
 			return m, nil
 		}
@@ -602,14 +603,16 @@ func (m providerTUIModel) updateCustomModelInput(key string, msg tea.KeyPressMsg
 	default:
 		var cmd tea.Cmd
 		m.modelInput, cmd = m.modelInput.Update(msg)
+		m.formError = ""
 		return m, cmd
 	}
 }
 
-// addCustomModelsToSession merges the given models into the current custom
-// provider's Models list and persists in-memory state. It does not change the
-// active model — the user picks that explicitly from the list afterwards.
-func (m *providerTUIModel) addCustomModelsToSession(models []string) error {
+// addCustomModelToSession appends a single model name to the current custom
+// provider's Models list and persists in-memory state to disk. It does not
+// change the active model — the user picks that explicitly from the list
+// afterwards.
+func (m *providerTUIModel) addCustomModelToSession(name string) error {
 	if m.existingCfg == nil {
 		return nil
 	}
@@ -619,7 +622,7 @@ func (m *providerTUIModel) addCustomModelsToSession(models []string) error {
 	}
 	entry := m.customProviderEntry(cp.name, cp.entry)
 	prevEntry := cloneProviderEntry(entry)
-	entry.Models = mergeModelLists(entry.Models, models)
+	entry.Models = append(entry.Models, name)
 	if m.existingCfg.CustomProviders == nil {
 		m.existingCfg.CustomProviders = make(map[string]ProviderEntry)
 	}
@@ -654,6 +657,7 @@ func (m providerTUIModel) updateAPIKeyInput(key string, msg tea.KeyPressMsg) (te
 	case "esc":
 		m.apiKeyInput.Blur()
 		m.step = stepModel
+		m.formError = ""
 		return m, nil
 	case "enter":
 		m.confirmed = true
@@ -672,6 +676,7 @@ func (m providerTUIModel) updateAPIKeyInput(key string, msg tea.KeyPressMsg) (te
 		}
 		var cmd tea.Cmd
 		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+		m.formError = ""
 		return m, cmd
 	}
 }
@@ -702,20 +707,25 @@ func (m providerTUIModel) updateCustomProviderForm(key string, msg tea.KeyPressM
 		} else {
 			m.cpStep--
 		}
+		m.formError = ""
 		return m, m.focusCPStep()
 	case "enter":
 		return m.handleCustomFormEnter()
-	case "up", "k":
-		if m.cpStep == cpStepProtocol && m.cpProtocolIdx > 0 {
-			m.cpProtocolIdx--
-		}
-		return m, nil
-	case "down", "j":
-		if m.cpStep == cpStepProtocol && m.cpProtocolIdx < len(cpProtocols)-1 {
-			m.cpProtocolIdx++
-		}
-		return m, nil
 	default:
+		if m.cpStep == cpStepProtocol {
+			switch key {
+			case "up", "k":
+				if m.cpProtocolIdx > 0 {
+					m.cpProtocolIdx--
+				}
+				return m, nil
+			case "down", "j":
+				if m.cpProtocolIdx < len(cpProtocols)-1 {
+					m.cpProtocolIdx++
+				}
+				return m, nil
+			}
+		}
 		if m.cpStep == cpStepAPIKey {
 			if m.apiKeyMasked {
 				if len(key) == 1 {
@@ -759,6 +769,13 @@ func (m *providerTUIModel) enterEditCustomProvider() {
 	}
 }
 
+func authHeaderFormError(raw string) string {
+	return fmt.Sprintf(
+		"Unsupported Auth Header %q. Use 'authorization' (default), 'x-api-key', or leave empty.",
+		strings.TrimSpace(raw),
+	)
+}
+
 func (m providerTUIModel) handleCustomFormEnter() (tea.Model, tea.Cmd) {
 	switch m.cpStep {
 	case cpStepName:
@@ -797,6 +814,11 @@ func (m providerTUIModel) handleCustomFormEnter() (tea.Model, tea.Cmd) {
 		m.cpStep = cpStepAuthHeader
 		return m, m.cpAuthInput.Focus()
 	case cpStepAuthHeader:
+		raw := m.cpAuthInput.Value()
+		if _, err := llm.NormalizeAuthHeader(raw); err != nil {
+			m.formError = authHeaderFormError(raw)
+			return m, nil
+		}
 		m.cpAuthInput.Blur()
 		if m.editingCustom {
 			r := m.result()
@@ -1041,6 +1063,9 @@ func (m providerTUIModel) passThroughCPInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cpStepAuthHeader:
 		m.cpAuthInput, cmd = m.cpAuthInput.Update(msg)
 	}
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		m.formError = ""
+	}
 	return m, cmd
 }
 
@@ -1056,6 +1081,7 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 			if m.existingCfg != nil {
 				m.manualURLInput.SetValue(m.existingCfg.Llm.URL)
 				m.manualModelInput.SetValue(m.existingCfg.Llm.Model)
+				m.manualAuthHeaderInput.SetValue(m.existingCfg.Llm.AuthHeader)
 				if m.existingCfg.Llm.AuthToken != "" {
 					m.manualTokenOriginal = m.existingCfg.Llm.AuthToken
 					m.manualTokenMasked = true
@@ -1068,28 +1094,35 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 			} else {
 				m.manualURLInput.SetValue("")
 				m.manualModelInput.SetValue("")
+				m.manualAuthHeaderInput.SetValue("")
 				m.manualTokenInput.SetValue("")
 				m.manualTokenMasked = false
 				m.manualTokenOriginal = ""
 			}
+			m.formError = ""
 			return m, nil
 		}
 		m.blurManualStep()
 		m.manualStep--
+		m.formError = ""
 		return m, m.focusManualStep()
 	case "enter":
 		return m.handleManualFormEnter()
-	case "up", "k":
-		if m.manualStep == manualStepProtocol && m.manualProtocolIdx > 0 {
-			m.manualProtocolIdx--
-		}
-		return m, nil
-	case "down", "j":
-		if m.manualStep == manualStepProtocol && m.manualProtocolIdx < len(cpProtocols)-1 {
-			m.manualProtocolIdx++
-		}
-		return m, nil
 	default:
+		if m.manualStep == manualStepProtocol {
+			switch key {
+			case "up", "k":
+				if m.manualProtocolIdx > 0 {
+					m.manualProtocolIdx--
+				}
+				return m, nil
+			case "down", "j":
+				if m.manualProtocolIdx < len(cpProtocols)-1 {
+					m.manualProtocolIdx++
+				}
+				return m, nil
+			}
+		}
 		if m.manualStep == manualStepAuthToken && m.manualTokenMasked {
 			if len(key) == 1 {
 				m.manualTokenMasked = false
@@ -1227,7 +1260,19 @@ func (m providerTUIModel) handleManualFormEnter() (tea.Model, tea.Cmd) {
 		m.manualStep = manualStepAuthToken
 		return m, m.manualTokenInput.Focus()
 	case manualStepAuthToken:
+		if m.manualTokenInput.Value() == "" && m.manualTokenOriginal == "" {
+			return m, nil
+		}
 		m.manualTokenInput.Blur()
+		m.manualStep = manualStepAuthHeader
+		return m, m.manualAuthHeaderInput.Focus()
+	case manualStepAuthHeader:
+		raw := m.manualAuthHeaderInput.Value()
+		if _, err := llm.NormalizeAuthHeader(raw); err != nil {
+			m.formError = authHeaderFormError(raw)
+			return m, nil
+		}
+		m.manualAuthHeaderInput.Blur()
 		m.confirmed = true
 		return m, tea.Quit
 	}
@@ -1244,6 +1289,8 @@ func (m *providerTUIModel) blurManualStep() {
 		m.manualModelInput.Blur()
 	case manualStepAuthToken:
 		m.manualTokenInput.Blur()
+	case manualStepAuthHeader:
+		m.manualAuthHeaderInput.Blur()
 	}
 }
 
@@ -1257,6 +1304,8 @@ func (m providerTUIModel) focusManualStep() tea.Cmd {
 		return m.manualModelInput.Focus()
 	case manualStepAuthToken:
 		return m.manualTokenInput.Focus()
+	case manualStepAuthHeader:
+		return m.manualAuthHeaderInput.Focus()
 	}
 	return nil
 }
@@ -1272,6 +1321,11 @@ func (m providerTUIModel) passThroughManualInput(msg tea.Msg) (tea.Model, tea.Cm
 		m.manualModelInput, cmd = m.manualModelInput.Update(msg)
 	case manualStepAuthToken:
 		m.manualTokenInput, cmd = m.manualTokenInput.Update(msg)
+	case manualStepAuthHeader:
+		m.manualAuthHeaderInput, cmd = m.manualAuthHeaderInput.Update(msg)
+	}
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		m.formError = ""
 	}
 	return m, cmd
 }
@@ -1296,7 +1350,7 @@ func (m providerTUIModel) handleEnter() (tea.Model, tea.Cmd) {
 			if m.customIdx == addIdx {
 				m.creatingCustom = true
 				m.cpStep = cpStepName
-				m.cpProtocolIdx = 1 // default openai
+				m.cpProtocolIdx = 0 // default anthropic
 				m.formError = ""
 				m.cpNameInput.SetValue("")
 				m.cpURLInput.SetValue("")
@@ -1327,6 +1381,7 @@ func (m providerTUIModel) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.step = stepAPIKey
+		m.formError = ""
 		m.loadExistingAPIKey()
 		return m, m.apiKeyInput.Focus()
 	}
@@ -1454,6 +1509,7 @@ func (m providerTUIModel) result() providerTUIResult {
 			if m.apiKeyMasked {
 				apiKey = m.apiKeyOriginal
 			}
+			authHeader, _ := llm.NormalizeAuthHeader(m.cpAuthInput.Value())
 			r := providerTUIResult{
 				provider:       m.cpNameInput.Value(),
 				apiKey:         apiKey,
@@ -1462,7 +1518,7 @@ func (m providerTUIModel) result() providerTUIResult {
 				editTargetName: m.editTargetName,
 				url:            m.cpURLInput.Value(),
 				protocol:       protocol,
-				authHeader:     m.cpAuthInput.Value(),
+				authHeader:     authHeader,
 			}
 			// Models are managed in the model selection step, not in the
 			// create/edit form. Preserve existing model/models when editing.
@@ -1501,126 +1557,21 @@ func (m providerTUIModel) result() providerTUIResult {
 
 	case tabManual:
 		apiKey := m.manualTokenInput.Value()
-		if m.manualTokenMasked {
+		if m.manualTokenMasked || (apiKey == "" && m.manualTokenOriginal != "") {
 			apiKey = m.manualTokenOriginal
 		}
+		authHeader, _ := llm.NormalizeAuthHeader(m.manualAuthHeaderInput.Value())
 		return providerTUIResult{
-			isManual: true,
-			url:      m.manualURLInput.Value(),
-			model:    m.manualModelInput.Value(),
-			apiKey:   apiKey,
-			protocol: cpProtocols[m.manualProtocolIdx],
+			isManual:   true,
+			url:        m.manualURLInput.Value(),
+			model:      m.manualModelInput.Value(),
+			apiKey:     apiKey,
+			protocol:   cpProtocols[m.manualProtocolIdx],
+			authHeader: authHeader,
 		}
 	}
 
 	return providerTUIResult{}
-}
-
-type globalConfigInfo struct {
-	tab         providerTab
-	officialIdx int
-	customIdx   int
-	ok          bool
-}
-
-func (m providerTUIModel) globalConfig() globalConfigInfo {
-	if m.existingCfg == nil {
-		return globalConfigInfo{}
-	}
-	if m.existingCfg.Provider != "" {
-		for i, p := range m.providers {
-			if p.Name == m.existingCfg.Provider {
-				return globalConfigInfo{tab: tabOfficial, officialIdx: i, ok: true}
-			}
-		}
-		if idx := m.findCustomIdx(m.existingCfg.Provider); idx >= 0 {
-			return globalConfigInfo{tab: tabCustom, customIdx: idx, ok: true}
-		}
-		// Provider configured but not in list (e.g. deleted in-session).
-		return globalConfigInfo{tab: tabCustom, customIdx: -1, ok: true}
-	}
-	// No active provider. If a Manual URL is configured, treat Manual as the
-	// globally-active tab so the green highlight reflects the user's real
-	// configuration.
-	if m.existingCfg.Llm.URL != "" {
-		return globalConfigInfo{tab: tabManual, ok: true}
-	}
-	// No active provider and no manual URL. Don't claim any tab as globally
-	// active — keeps the green highlight strictly tied to a real config.
-	return globalConfigInfo{}
-}
-
-func (m providerTUIModel) isViewingGlobalActiveProvider() bool {
-	global := m.globalConfig()
-	if !global.ok || global.tab == tabManual {
-		return false
-	}
-	switch global.tab {
-	case tabOfficial:
-		return m.activeTab == tabOfficial && m.officialIdx == global.officialIdx
-	case tabCustom:
-		return m.activeTab == tabCustom && global.customIdx >= 0 &&
-			m.customIdx == global.customIdx && m.customIdx < len(m.customProviders)
-	}
-	return false
-}
-
-func (m providerTUIModel) modelListActiveModelName() string {
-	if m.existingCfg == nil || m.step != stepModel {
-		return ""
-	}
-	models := m.models()
-
-	switch m.activeTab {
-	case tabCustom:
-		cp, ok := m.selectedCustomProvider()
-		if !ok || m.existingCfg.Provider != cp.name {
-			return ""
-		}
-		entry := m.customProviderEntry(cp.name, cp.entry)
-		name := activeModelForProvider(m.existingCfg, cp.name, entry)
-		if name == "" || !modelListContains(models, name) {
-			return ""
-		}
-		return name
-	case tabOfficial:
-		if m.existingCfg.Provider == "" {
-			return ""
-		}
-		p := m.currentProvider()
-		if p.Name != m.existingCfg.Provider {
-			return ""
-		}
-		entry := m.existingCfg.Providers[p.Name]
-		name := activeModelForProvider(m.existingCfg, p.Name, entry)
-		if name == "" || !modelListContains(models, name) {
-			return ""
-		}
-		return name
-	}
-	return ""
-}
-
-func (m providerTUIModel) globalActiveModelName() string {
-	if !m.isViewingGlobalActiveProvider() || m.existingCfg == nil || m.existingCfg.Provider == "" {
-		return ""
-	}
-	models := m.models()
-	if entry, ok := m.existingCfg.Providers[m.existingCfg.Provider]; ok {
-		name := activeModelForProvider(m.existingCfg, m.existingCfg.Provider, entry)
-		if name == "" || !modelListContains(models, name) {
-			return ""
-		}
-		return name
-	}
-	if entry, ok := m.existingCfg.CustomProviders[m.existingCfg.Provider]; ok {
-		name := activeModelForProvider(m.existingCfg, m.existingCfg.Provider, entry)
-		if name == "" || !modelListContains(models, name) {
-			return ""
-		}
-		return name
-	}
-	return ""
 }
 
 func listCursorPrefix(isCursor bool) string {
@@ -1630,15 +1581,11 @@ func listCursorPrefix(isCursor bool) string {
 	return "    "
 }
 
-func renderListName(name string, isCursor, isGlobal bool) string {
-	switch {
-	case isGlobal:
-		return tuiGlobalActiveStyle.Render(name)
-	case isCursor:
+func renderListName(name string, isCursor bool) string {
+	if isCursor {
 		return tuiSelectedItemStyle.Render(name)
-	default:
-		return tuiItemStyle.Render(name)
 	}
+	return tuiItemStyle.Render(name)
 }
 
 // --- View ---
@@ -1661,7 +1608,7 @@ func (m providerTUIModel) View() tea.View {
 	return v
 }
 
-func renderTabBar(active providerTab, global globalConfigInfo) string {
+func renderTabBar(active providerTab) string {
 	tabs := []struct {
 		label string
 		tab   providerTab
@@ -1673,17 +1620,9 @@ func renderTabBar(active providerTab, global globalConfigInfo) string {
 
 	var parts []string
 	for _, t := range tabs {
-		isCursor := t.tab == active
-		isGlobal := global.ok && t.tab == global.tab
-
-		switch {
-		case isCursor && isGlobal:
-			parts = append(parts, tuiCursorStyle.Render("◉")+" "+tuiGlobalActiveTabStyle.Render(t.label))
-		case isCursor:
+		if t.tab == active {
 			parts = append(parts, tuiActiveTabStyle.Render("◉ "+t.label))
-		case isGlobal:
-			parts = append(parts, tuiGlobalActiveTabStyle.Render("○ "+t.label))
-		default:
+		} else {
 			parts = append(parts, tuiInactiveTabStyle.Render("○ "+t.label))
 		}
 	}
@@ -1691,8 +1630,7 @@ func renderTabBar(active providerTab, global globalConfigInfo) string {
 }
 
 func (m providerTUIModel) viewProvider(s *strings.Builder) {
-	global := m.globalConfig()
-	s.WriteString(renderTabBar(m.activeTab, global))
+	s.WriteString(renderTabBar(m.activeTab))
 	s.WriteString("\n\n")
 
 	switch m.activeTab {
@@ -1721,16 +1659,9 @@ func (m providerTUIModel) viewOfficialTab(s *strings.Builder) {
 	s.WriteString(tuiTitleStyle.Render("  Select a provider"))
 	s.WriteString("\n\n")
 
-	global := m.globalConfig()
-	globalIdx := -1
-	if global.ok && global.tab == tabOfficial {
-		globalIdx = global.officialIdx
-	}
-
 	for i, p := range m.providers {
 		isCursor := i == m.officialIdx
-		isGlobal := i == globalIdx
-		s.WriteString(listCursorPrefix(isCursor) + renderListName(p.DisplayName, isCursor, isGlobal))
+		s.WriteString(listCursorPrefix(isCursor) + renderListName(p.DisplayName, isCursor))
 		s.WriteString("\n")
 	}
 }
@@ -1744,18 +1675,11 @@ func (m providerTUIModel) viewCustomTab(s *strings.Builder) {
 	s.WriteString(tuiTitleStyle.Render("  Select a provider"))
 	s.WriteString("\n\n")
 
-	global := m.globalConfig()
-	globalIdx := -1
-	if global.ok && global.tab == tabCustom && global.customIdx >= 0 {
-		globalIdx = global.customIdx
-	}
-
 	for i, cp := range m.customProviders {
 		isCursor := i == m.customIdx
-		isGlobal := i == globalIdx
 		activeModel := m.customProviderActiveModel(cp)
 
-		s.WriteString(listCursorPrefix(isCursor) + renderListName(cp.name, isCursor, isGlobal))
+		s.WriteString(listCursorPrefix(isCursor) + renderListName(cp.name, isCursor))
 		if activeModel != "" {
 			s.WriteString("  " + tuiDimStyle.Render("("+activeModel+")"))
 		}
@@ -1885,6 +1809,7 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 		{"Protocol", cpProtocols[m.manualProtocolIdx], m.manualStep == manualStepProtocol},
 		{"Model", m.manualModelInput.Value(), m.manualStep == manualStepModel},
 		{"Auth Token", strings.Repeat("*", len(m.manualTokenInput.Value())), m.manualStep == manualStepAuthToken},
+		{"Auth Header", m.manualAuthHeaderInput.Value(), m.manualStep == manualStepAuthHeader},
 	}
 
 	for _, f := range fields {
@@ -1907,10 +1832,26 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 				s.WriteString("    " + m.manualModelInput.View() + "\n")
 			case manualStepAuthToken:
 				s.WriteString("    " + m.manualTokenInput.View() + "\n")
+			case manualStepAuthHeader:
+				s.WriteString("    " + m.manualAuthHeaderInput.View() + "\n")
 			}
-		} else if f.value != "" {
-			s.WriteString("  " + tuiDimStyle.Render(f.label+": "+f.value) + "\n")
+		} else {
+			display := f.value
+			if display == "" && f.label == "Auth Header" {
+				display = "(Authorization)"
+			}
+			if display == "" {
+				s.WriteString("  " + tuiDimStyle.Render(f.label+":") + "\n")
+			} else {
+				s.WriteString("  " + tuiDimStyle.Render(f.label+": "+display) + "\n")
+			}
 		}
+	}
+
+	if m.formError != "" {
+		s.WriteString("\n")
+		s.WriteString(tuiErrorStyle.Render("  " + m.formError))
+		s.WriteString("\n")
 	}
 }
 
@@ -1919,12 +1860,10 @@ func (m providerTUIModel) viewModel(s *strings.Builder) {
 	s.WriteString("\n\n")
 
 	models := m.models()
-	globalModel := m.modelListActiveModelName()
 
 	for i, model := range models {
 		isCursor := i == m.modelIdx
-		isGlobal := globalModel != "" && model == globalModel
-		s.WriteString(listCursorPrefix(isCursor) + renderListName(model, isCursor, isGlobal))
+		s.WriteString(listCursorPrefix(isCursor) + renderListName(model, isCursor))
 		s.WriteString("\n")
 	}
 
@@ -1941,6 +1880,10 @@ func (m providerTUIModel) viewModel(s *strings.Builder) {
 	if m.customModel {
 		s.WriteString("\n")
 		s.WriteString("  " + m.modelInput.View())
+		if m.formError != "" {
+			s.WriteString("\n")
+			s.WriteString("  " + tuiErrorStyle.Render(m.formError))
+		}
 		s.WriteString("\n")
 	}
 
@@ -2020,14 +1963,6 @@ var (
 
 	tuiInactiveTabStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("8"))
-
-	tuiGlobalActiveStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("10"))
-
-	tuiGlobalActiveTabStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("10"))
 
 	tuiErrorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("9"))
@@ -2177,21 +2112,16 @@ func (m modelTUIModel) View() tea.View {
 	s.WriteString(tuiTitleStyle.Render(fmt.Sprintf("  Select a model (%s)", m.provider.DisplayName)))
 	s.WriteString("\n\n")
 
-	isGlobalCustom := m.activeModel != "" && !modelListContains(m.models, m.activeModel)
-
 	for i, model := range m.models {
 		isCursor := i == m.modelIdx
-		isGlobal := m.activeModel != "" && model == m.activeModel
-		s.WriteString(listCursorPrefix(isCursor) + renderListName(model, isCursor, isGlobal))
+		s.WriteString(listCursorPrefix(isCursor) + renderListName(model, isCursor))
 		s.WriteString("\n")
 	}
 
 	customIdx := len(m.models)
 	isCursor := m.modelIdx == customIdx
 	customLabel := "Enter custom model name..."
-	if isGlobalCustom {
-		s.WriteString(listCursorPrefix(isCursor) + renderListName(customLabel, isCursor, true))
-	} else if isCursor {
+	if isCursor {
 		s.WriteString(listCursorPrefix(isCursor) + tuiSelectedItemStyle.Render(customLabel))
 	} else {
 		s.WriteString(listCursorPrefix(isCursor) + tuiDimStyle.Render(customLabel))
