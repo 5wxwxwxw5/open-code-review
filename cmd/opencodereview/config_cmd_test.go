@@ -416,3 +416,23 @@ func TestUnsetInvalidKey(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureModelInList(t *testing.T) {
+	models := []string{"test-model", "test-model-2", "bbb", "aaa", "test-model-3"}
+
+	got := ensureModelInList(models, "test-model-3")
+	if len(got) != len(models) {
+		t.Fatalf("existing model should not reorder: got %v", got)
+	}
+	for i := range models {
+		if got[i] != models[i] {
+			t.Errorf("models[%d] = %q, want %q", i, got[i], models[i])
+		}
+	}
+
+	got = ensureModelInList(models, "new-model")
+	want := append(append([]string(nil), models...), "new-model")
+	if len(got) != len(want) || got[len(got)-1] != "new-model" {
+		t.Errorf("new model should append: got %v, want %v", got, want)
+	}
+}

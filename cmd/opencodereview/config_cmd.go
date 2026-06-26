@@ -394,6 +394,16 @@ func parseModelListValue(value string) ([]string, error) {
 	return normalizeModelList(strings.Split(value, ",")), nil
 }
 
+func activeModelForProvider(cfg *Config, providerName string, entry ProviderEntry) string {
+	if entry.Model != "" {
+		return entry.Model
+	}
+	if cfg != nil && cfg.Provider == providerName && cfg.Model != "" {
+		return cfg.Model
+	}
+	return ""
+}
+
 func normalizeModelList(models []string) []string {
 	out := make([]string, 0, len(models))
 	seen := make(map[string]struct{}, len(models))
@@ -417,6 +427,19 @@ func mergeModelLists(lists ...[]string) []string {
 		merged = append(merged, list...)
 	}
 	return normalizeModelList(merged)
+}
+
+// ensureModelInList appends model to the end when missing; never reorders existing entries.
+func ensureModelInList(models []string, model string) []string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return models
+	}
+	if modelListContains(models, model) {
+		return models
+	}
+	out := append([]string(nil), models...)
+	return append(out, model)
 }
 
 func modelListContains(models []string, target string) bool {

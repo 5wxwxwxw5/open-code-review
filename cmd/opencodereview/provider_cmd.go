@@ -22,7 +22,7 @@ func runConfigProvider() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	m := newProviderTUI(cfg)
+	m := newProviderTUI(cfg, configPath)
 	p := tea.NewProgram(m)
 	finalModel, err := p.Run()
 	if err != nil {
@@ -31,19 +31,11 @@ func runConfigProvider() error {
 
 	final := finalModel.(providerTUIModel)
 
-	if len(final.deletedProviders) > 0 {
-		clearedActive, err := applyProviderDeletions(configPath, cfg, final.deletedProviders)
-		if err != nil {
-			return err
-		}
-		if clearedActive && !final.confirmed {
-			fmt.Fprintf(os.Stderr, "[ocr] WARNING: active provider was deleted; 'provider' and 'model' have been cleared.\n")
-			fmt.Fprintf(os.Stderr, "[ocr] Run 'ocr config provider' to select a new provider.\n")
-		}
-	}
-
 	if !final.confirmed {
-		if len(final.deletedProviders) > 0 {
+		// TUI persists changes (create/edit/model/add/delete) directly to disk
+		// during the session, so the on-disk file is already up to date for any
+		// savedInSession operation. No additional post-TUI apply step is needed.
+		if final.savedInSession {
 			return nil
 		}
 		fmt.Println("Cancelled.")
@@ -82,6 +74,21 @@ func applyProviderDeletions(configPath string, cfg *Config, names []string) (boo
 	return clearedActive, nil
 }
 
+func removeModels(existing, toRemove []string) []string {
+	removeSet := make(map[string]struct{}, len(toRemove))
+	for _, m := range toRemove {
+		removeSet[m] = struct{}{}
+	}
+	result := make([]string, 0, len(existing))
+	for _, m := range existing {
+		if _, found := removeSet[m]; found {
+			continue
+		}
+		result = append(result, m)
+	}
+	return result
+}
+
 func applyManualConfig(configPath string, cfg *Config, result providerTUIResult) error {
 	if result.url == "" {
 		return fmt.Errorf("URL is required for manual configuration")
@@ -95,6 +102,13 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 	cfg.Llm.URL = result.url
 	cfg.Llm.Model = result.model
 	cfg.Llm.AuthToken = result.apiKey
+	authHeader, err := llm.NormalizeAuthHeader(result.authHeader)
+	if err != nil {
+		return fmt.Errorf("invalid auth_header: %w", err)
+	}
+	cfg.Llm.AuthHeader = authHeader
+	useAnthropic := result.protocol == "anthropic"
+	cfg.Llm.UseAnthropic = &useAnthropic
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -102,6 +116,7 @@ func applyManualConfig(configPath string, cfg *Config, result providerTUIResult)
 
 	fmt.Println("\nManual configuration saved.")
 	fmt.Printf("URL: %s\n", result.url)
+	fmt.Printf("Protocol: %s\n", result.protocol)
 	fmt.Printf("Model: %s\n", result.model)
 
 	fmt.Println("\nTesting connection...")
@@ -129,8 +144,9 @@ func applyCustomProviderConfig(configPath string, cfg *Config, result providerTU
 	entry := cfg.CustomProviders[result.provider]
 	entry.Model = result.model
 	if len(result.models) > 0 {
-		entry.Models = mergeModelLists([]string{result.model}, result.models)
+		entry.Models = append([]string(nil), result.models...)
 	}
+	entry.Models = ensureModelInList(entry.Models, result.model)
 	if result.url != "" {
 		entry.URL = result.url
 	}
@@ -138,20 +154,37 @@ func applyCustomProviderConfig(configPath string, cfg *Config, result providerTU
 		entry.Protocol = result.protocol
 	}
 	if result.authHeader != "" {
-		entry.AuthHeader = result.authHeader
+		authHeader, err := llm.NormalizeAuthHeader(result.authHeader)
+		if err != nil {
+			return fmt.Errorf("invalid auth_header: %w", err)
+		}
+		entry.AuthHeader = authHeader
 	}
 	if result.apiKey != "" {
 		entry.APIKey = result.apiKey
 	}
 	cfg.CustomProviders[result.provider] = entry
 
-	if cfg.Provider != result.provider {
-		cfg.Model = ""
+	if !result.isEdit {
+		cfg.Provider = result.provider
+		cfg.Model = result.model
+	} else if cfg.Provider == result.provider {
+		cfg.Model = result.model
 	}
-	cfg.Provider = result.provider
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
+	}
+
+	if result.isEdit {
+		if cfg.Provider == result.provider {
+			fmt.Printf("\nActive provider %q updated.\n", result.provider)
+		} else {
+			fmt.Printf("\nCustom provider %q updated (not currently active).\n", result.provider)
+		}
+		fmt.Printf("Model: %s\n", result.model)
+		fmt.Println("\nTip: run 'ocr config model' to switch model later.")
+		return nil
 	}
 
 	fmt.Printf("\nProvider set to: %s (custom)\n", result.provider)
@@ -203,6 +236,7 @@ func applyOfficialProviderConfig(configPath string, cfg *Config, result provider
 		cfg.Model = ""
 	}
 	cfg.Provider = result.provider
+	cfg.Model = result.model
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
@@ -243,7 +277,7 @@ func runConfigModel() error {
 	if preset, isPreset := llm.LookupProvider(cfg.Provider); isPreset {
 		provider = preset
 		if entry, ok := cfg.Providers[cfg.Provider]; ok {
-			currentModel = entry.Model
+			currentModel = activeModelForProvider(cfg, cfg.Provider, entry)
 			provider.Models = mergeModelLists(provider.Models, entry.Models)
 		}
 	} else {
@@ -252,14 +286,11 @@ func runConfigModel() error {
 		if !ok {
 			return fmt.Errorf("provider %q is not configured in custom_providers", cfg.Provider)
 		}
-		currentModel = entry.Model
+		currentModel = activeModelForProvider(cfg, cfg.Provider, entry)
 		provider.DisplayName = cfg.Provider + " (custom)"
 		provider.Protocol = entry.Protocol
 		provider.BaseURL = entry.URL
 		provider.Models = mergeModelLists(entry.Models)
-	}
-	if currentModel == "" {
-		currentModel = cfg.Model
 	}
 
 	m := newModelTUI(provider, currentModel)
@@ -286,7 +317,7 @@ func runConfigModel() error {
 		}
 		entry := cfg.CustomProviders[cfg.Provider]
 		entry.Model = selectedModel
-		entry.Models = mergeModelLists([]string{selectedModel}, entry.Models)
+		entry.Models = ensureModelInList(entry.Models, selectedModel)
 		cfg.CustomProviders[cfg.Provider] = entry
 	} else {
 		if cfg.Providers == nil {
@@ -295,10 +326,11 @@ func runConfigModel() error {
 		entry := cfg.Providers[cfg.Provider]
 		entry.Model = selectedModel
 		if !modelListContains(provider.Models, selectedModel) {
-			entry.Models = mergeModelLists([]string{selectedModel}, entry.Models)
+			entry.Models = ensureModelInList(entry.Models, selectedModel)
 		}
 		cfg.Providers[cfg.Provider] = entry
 	}
+	cfg.Model = selectedModel
 
 	if err := saveConfig(configPath, cfg); err != nil {
 		return err
