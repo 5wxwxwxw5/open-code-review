@@ -1157,4 +1157,7 @@ func TestProviderTUI_DeleteModelPreservesActiveModel(t *testing.T) {
 	if m2.existingCfg.Model != "step-3.5-flash" {
 		t.Errorf("cfg.Model = %q, want step-3.5-flash", m2.existingCfg.Model)
 	}
+	if !m2.savedInSession {
+		t.Error("savedInSession should be true after deleting a model")
+	}
 }

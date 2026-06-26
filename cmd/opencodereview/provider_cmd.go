@@ -74,43 +74,6 @@ func applyProviderDeletions(configPath string, cfg *Config, names []string) (boo
 	return clearedActive, nil
 }
 
-func applyModelDeletions(configPath string, cfg *Config, deletedModels map[string][]string) error {
-	if len(deletedModels) == 0 {
-		return nil
-	}
-	if cfg.CustomProviders != nil {
-		for name, models := range deletedModels {
-			entry, ok := cfg.CustomProviders[name]
-			if !ok {
-				continue
-			}
-			original := entry.Models
-			entry.Models = removeModels(entry.Models, models)
-			modelsChanged := len(entry.Models) != len(original)
-
-			entryChanged := modelsChanged
-			if modelListContains(models, entry.Model) {
-				entry.Model = ""
-				entryChanged = true
-			}
-			if cfg.Provider == name && modelListContains(models, cfg.Model) {
-				cfg.Model = ""
-			}
-			if entryChanged {
-				cfg.CustomProviders[name] = entry
-				for _, m := range original {
-					if !modelListContains(entry.Models, m) {
-						fmt.Printf("Deleted model %q from custom provider %q.\n", m, name)
-					}
-				}
-			}
-		}
-	}
-	// Always persist when deletions were requested; in-session TUI edits may
-	// have already applied changes to cfg, making a diff-based changed flag unreliable.
-	return saveConfig(configPath, cfg)
-}
-
 func removeModels(existing, toRemove []string) []string {
 	removeSet := make(map[string]struct{}, len(toRemove))
 	for _, m := range toRemove {

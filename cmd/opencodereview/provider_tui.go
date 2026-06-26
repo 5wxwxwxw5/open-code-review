@@ -128,7 +128,6 @@ type providerTUIModel struct {
 	deletedProviders      []string
 	confirmingDeleteModel bool
 	deleteModelName       string
-	deletedModels         map[string][]string
 }
 
 func (m providerTUIModel) customProviderNameTaken(name string) bool {
@@ -822,7 +821,7 @@ func (m providerTUIModel) handleCustomFormEnter() (tea.Model, tea.Cmd) {
 		m.cpAuthInput.Blur()
 		if m.editingCustom {
 			r := m.result()
-			if m.applyEditCustomProviderSave() {
+			if err := m.applyEditCustomProviderSave(); err != nil {
 				return m, nil
 			}
 			// Edit succeeded — drop the user into the model list for this provider.
@@ -920,6 +919,7 @@ func cloneProviderEntry(v ProviderEntry) ProviderEntry {
 	if v.ExtraBody != nil {
 		out.ExtraBody = make(map[string]any, len(v.ExtraBody))
 		for k, val := range v.ExtraBody {
+			// Shallow copy only: nested maps/slices inside val are not cloned.
 			out.ExtraBody[k] = val
 		}
 	}
@@ -945,14 +945,14 @@ func cloneCustomProviderList(src []customProviderListItem) []customProviderListI
 	return out
 }
 
-func (m *providerTUIModel) applyEditCustomProviderSave() bool {
+func (m *providerTUIModel) applyEditCustomProviderSave() error {
 	if m.existingCfg == nil {
 		m.formError = "Failed to save: config not loaded"
-		return true
+		return fmt.Errorf("config not loaded")
 	}
 	if m.configPath == "" {
 		m.formError = "Failed to save: config path not available"
-		return true
+		return fmt.Errorf("config path not available")
 	}
 	r := m.result()
 	backupProviders := cloneCustomProvidersMap(m.existingCfg.CustomProviders)
@@ -983,7 +983,7 @@ func (m *providerTUIModel) applyEditCustomProviderSave() bool {
 	if r.editTargetName != "" && r.editTargetName != r.provider {
 		if _, exists := m.existingCfg.CustomProviders[r.provider]; exists {
 			m.formError = fmt.Sprintf(`Provider "%s" already exists`, r.provider)
-			return true
+			return fmt.Errorf("provider %q already exists", r.provider)
 		}
 		delete(m.existingCfg.CustomProviders, r.editTargetName)
 		if m.existingCfg.Provider == r.editTargetName {
@@ -1004,14 +1004,14 @@ func (m *providerTUIModel) applyEditCustomProviderSave() bool {
 			m.existingCfg.Model = backupActiveModel
 			m.customProviders = backupCustomList
 		}
-		return true
+		return fmt.Errorf("save config: %w", err)
 	}
 	m.customProviders = collectCustomProviders(m.existingCfg)
 	if idx := m.findCustomIdx(r.provider); idx >= 0 {
 		m.customIdx = idx
 	}
 	m.savedInSession = true
-	return false
+	return nil
 }
 
 func (m providerTUIModel) findCustomIdx(name string) int {
@@ -1228,6 +1228,7 @@ func (m providerTUIModel) updateDeleteModelConfirm(key string) (tea.Model, tea.C
 				}
 			}
 		}
+		m.savedInSession = true
 		m.confirmingDeleteModel = false
 		return m, nil
 	case "n", "N", "esc":
