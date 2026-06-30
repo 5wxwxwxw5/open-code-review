@@ -155,6 +155,16 @@ var registry = []Provider{
 		},
 	},
 	{
+		Name:        "longcat",
+		DisplayName: "Meituan LongCat API",
+		Protocol:    "openai",
+		BaseURL:     "https://api.longcat.chat/openai/v1",
+		EnvVar:      "LONGCAT_API_KEY",
+		Models: []string{
+			"LongCat-2.0",
+		},
+	},
+	{
 		Name:        "z-ai",
 		DisplayName: "Z.AI API",
 		Protocol:    "openai",
