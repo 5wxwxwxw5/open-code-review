@@ -287,7 +287,7 @@ func newProviderTUI(cfg *Config, configPath string) providerTUIModel {
 		if cfg.Llm.AuthToken != "" {
 			m.manualTokenOriginal = cfg.Llm.AuthToken
 			m.manualTokenMasked = true
-			m.manualTokenInput.SetValue(strings.Repeat("*", 20))
+			m.manualTokenInput.SetValue(maskedSecretPlaceholder())
 		}
 		if cfg.Llm.UseAnthropic == nil || *cfg.Llm.UseAnthropic {
 			m.manualProtocolIdx = 0 // anthropic
@@ -555,6 +555,9 @@ func (m providerTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.passThroughManualInput(msg)
 		}
 		if m.step == stepAPIKey {
+			if m.apiKeyMasked && isUserEditMsg(msg) {
+				m.beginAPIKeyReplace()
+			}
 			var cmd tea.Cmd
 			m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
 			return m, cmd
@@ -588,8 +591,14 @@ func (m providerTUIModel) updateCustomModelInput(key string, msg tea.KeyPressMsg
 			}
 		}
 		m.formError = ""
-		if err := m.addCustomModelToSession(name); err != nil {
+		persisted, err := m.persistCustomModelName(name)
+		if err != nil {
 			m.formError = err.Error()
+			return m, nil
+		}
+		if !persisted {
+			// No active provider context — refuse with an error message.
+			m.formError = "no active provider to attach this model to"
 			return m, nil
 		}
 		m.customModel = false
@@ -607,37 +616,109 @@ func (m providerTUIModel) updateCustomModelInput(key string, msg tea.KeyPressMsg
 	}
 }
 
-// addCustomModelToSession appends a single model name to the current custom
-// provider's Models list and persists in-memory state to disk. It does not
-// change the active model — the user picks that explicitly from the list
-// afterwards.
-func (m *providerTUIModel) addCustomModelToSession(name string) error {
+// persistCustomModelName appends a single model name to the active provider's
+// Models list (official or custom) and saves the config. It does not change
+// the active model — the user picks that explicitly from the list afterwards.
+//
+// Returns (persisted, error). When no provider is active (neither official
+// nor custom), persisted is false and the caller decides how to handle it.
+func (m *providerTUIModel) persistCustomModelName(name string) (bool, error) {
+	if name == "" {
+		return false, fmt.Errorf("model name must not be empty")
+	}
 	if m.existingCfg == nil {
-		return nil
+		return false, nil
 	}
-	cp, ok := m.selectedCustomProvider()
-	if !ok {
-		return nil
-	}
-	entry := m.customProviderEntry(cp.name, cp.entry)
-	prevEntry := cloneProviderEntry(entry)
-	entry.Models = append(entry.Models, name)
-	if m.existingCfg.CustomProviders == nil {
-		m.existingCfg.CustomProviders = make(map[string]ProviderEntry)
-	}
-	m.existingCfg.CustomProviders[cp.name] = entry
-	cp.entry = entry
-	m.customProviders[m.customIdx] = cp
-	if m.configPath != "" {
-		if err := saveConfig(m.configPath, m.existingCfg); err != nil {
-			m.existingCfg.CustomProviders[cp.name] = prevEntry
-			cp.entry = prevEntry
-			m.customProviders[m.customIdx] = cp
-			return fmt.Errorf("failed to save models: %w", err)
+	switch m.activeTab {
+	case tabCustom:
+		cp, ok := m.selectedCustomProvider()
+		if !ok {
+			return false, nil
 		}
+		entry := m.customProviderEntry(cp.name, cp.entry)
+		prevEntry := cloneProviderEntry(entry)
+		entry.Models = append(entry.Models, name)
+		if m.existingCfg.CustomProviders == nil {
+			m.existingCfg.CustomProviders = make(map[string]ProviderEntry)
+		}
+		m.existingCfg.CustomProviders[cp.name] = entry
+		cp.entry = entry
+		m.customProviders[m.customIdx] = cp
+		if m.configPath != "" {
+			if err := saveConfig(m.configPath, m.existingCfg); err != nil {
+				m.existingCfg.CustomProviders[cp.name] = prevEntry
+				cp.entry = prevEntry
+				m.customProviders[m.customIdx] = cp
+				return false, fmt.Errorf("failed to save models: %w", err)
+			}
+		}
+		m.savedInSession = true
+		return true, nil
+	case tabOfficial:
+		provider := m.currentProvider()
+		if provider.Name == "" {
+			return false, nil
+		}
+		if m.existingCfg.Providers == nil {
+			m.existingCfg.Providers = make(map[string]ProviderEntry)
+		}
+		entry := m.existingCfg.Providers[provider.Name]
+		prevEntry := cloneProviderEntry(entry)
+		entry.Models = append(entry.Models, name)
+		m.existingCfg.Providers[provider.Name] = entry
+		// Intentionally do not mutate m.providers[officialIdx].Models: that slice
+		// is a read-only snapshot from the provider registry (llm.ListProviders).
+		// User-added models live only in existingCfg.Providers; models() merges both
+		// at display time, unlike custom tab where customProviders is the sole list.
+		if m.configPath != "" {
+			if err := saveConfig(m.configPath, m.existingCfg); err != nil {
+				m.existingCfg.Providers[provider.Name] = prevEntry
+				return false, fmt.Errorf("failed to save models: %w", err)
+			}
+		}
+		m.savedInSession = true
+		return true, nil
+	default:
+		return false, fmt.Errorf("unsupported tab for custom model: %v", m.activeTab)
 	}
-	m.savedInSession = true
-	return nil
+}
+
+const maskedSecretDisplayLen = 20
+
+func maskedSecretPlaceholder() string {
+	return strings.Repeat("*", maskedSecretDisplayLen)
+}
+
+// isUserEditMsg reports whether msg represents user text input (typing or paste).
+func isUserEditMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.PasteMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+// beginAPIKeyReplace switches from the fixed-length mask placeholder to edit
+// mode so the next keystroke or paste fully replaces the saved key. While
+// editing, EchoPassword shows one '*' per typed character.
+func (m *providerTUIModel) beginAPIKeyReplace() {
+	if !m.apiKeyMasked {
+		return
+	}
+	m.apiKeyMasked = false
+	m.apiKeyOriginal = ""
+	m.apiKeyInput.SetValue("")
+}
+
+// beginManualTokenReplace is the manual-tab equivalent of beginAPIKeyReplace.
+func (m *providerTUIModel) beginManualTokenReplace() {
+	if !m.manualTokenMasked {
+		return
+	}
+	m.manualTokenMasked = false
+	m.manualTokenOriginal = ""
+	m.manualTokenInput.SetValue("")
 }
 
 // refreshModelSelectionForCustom moves the cursor to "Enter custom model name..."
@@ -666,12 +747,7 @@ func (m providerTUIModel) updateAPIKeyInput(key string, msg tea.KeyPressMsg) (te
 		return m, tea.Quit
 	default:
 		if m.apiKeyMasked {
-			if len(key) == 1 {
-				m.apiKeyMasked = false
-				m.apiKeyInput.SetValue("")
-			} else {
-				return m, nil
-			}
+			m.beginAPIKeyReplace()
 		}
 		var cmd tea.Cmd
 		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
@@ -727,12 +803,7 @@ func (m providerTUIModel) updateCustomProviderForm(key string, msg tea.KeyPressM
 		}
 		if m.cpStep == cpStepAPIKey {
 			if m.apiKeyMasked {
-				if len(key) == 1 {
-					m.apiKeyMasked = false
-					m.apiKeyInput.SetValue("")
-				} else {
-					return m, nil
-				}
+				m.beginAPIKeyReplace()
 			}
 			var cmd tea.Cmd
 			m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
@@ -760,7 +831,7 @@ func (m *providerTUIModel) enterEditCustomProvider() {
 	if entry.APIKey != "" {
 		m.apiKeyOriginal = entry.APIKey
 		m.apiKeyMasked = true
-		m.apiKeyInput.SetValue(strings.Repeat("*", 20))
+		m.apiKeyInput.SetValue(maskedSecretPlaceholder())
 	} else {
 		m.apiKeyInput.SetValue("")
 		m.apiKeyMasked = false
@@ -1059,7 +1130,9 @@ func (m providerTUIModel) passThroughCPInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cpStepBaseURL:
 		m.cpURLInput, cmd = m.cpURLInput.Update(msg)
 	case cpStepAPIKey:
-		// masked unlock is handled in updateCustomProviderForm default branch
+		if m.apiKeyMasked && isUserEditMsg(msg) {
+			m.beginAPIKeyReplace()
+		}
 		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
 	case cpStepAuthHeader:
 		m.cpAuthInput, cmd = m.cpAuthInput.Update(msg)
@@ -1086,7 +1159,7 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 				if m.existingCfg.Llm.AuthToken != "" {
 					m.manualTokenOriginal = m.existingCfg.Llm.AuthToken
 					m.manualTokenMasked = true
-					m.manualTokenInput.SetValue(strings.Repeat("*", 20))
+					m.manualTokenInput.SetValue(maskedSecretPlaceholder())
 				} else {
 					m.manualTokenInput.SetValue("")
 					m.manualTokenMasked = false
@@ -1125,12 +1198,7 @@ func (m providerTUIModel) updateManualForm(key string, msg tea.KeyPressMsg) (tea
 			}
 		}
 		if m.manualStep == manualStepAuthToken && m.manualTokenMasked {
-			if len(key) == 1 {
-				m.manualTokenMasked = false
-				m.manualTokenInput.SetValue("")
-			} else {
-				return m, nil
-			}
+			m.beginManualTokenReplace()
 		}
 		return m.passThroughManualInput(msg)
 	}
@@ -1322,6 +1390,9 @@ func (m providerTUIModel) passThroughManualInput(msg tea.Msg) (tea.Model, tea.Cm
 	case manualStepModel:
 		m.manualModelInput, cmd = m.manualModelInput.Update(msg)
 	case manualStepAuthToken:
+		if m.manualTokenMasked && isUserEditMsg(msg) {
+			m.beginManualTokenReplace()
+		}
 		m.manualTokenInput, cmd = m.manualTokenInput.Update(msg)
 	case manualStepAuthHeader:
 		m.manualAuthHeaderInput, cmd = m.manualAuthHeaderInput.Update(msg)
@@ -1452,7 +1523,7 @@ func (m *providerTUIModel) loadExistingAPIKey() {
 		if cp, ok := m.selectedCustomProvider(); ok && cp.entry.APIKey != "" {
 			m.apiKeyOriginal = cp.entry.APIKey
 			m.apiKeyMasked = true
-			m.apiKeyInput.SetValue(strings.Repeat("*", 20))
+			m.apiKeyInput.SetValue(maskedSecretPlaceholder())
 		}
 		return
 	}
@@ -1463,7 +1534,7 @@ func (m *providerTUIModel) loadExistingAPIKey() {
 	if entry, ok := m.existingCfg.Providers[p.Name]; ok && entry.APIKey != "" {
 		m.apiKeyOriginal = entry.APIKey
 		m.apiKeyMasked = true
-		m.apiKeyInput.SetValue(strings.Repeat("*", 20))
+		m.apiKeyInput.SetValue(maskedSecretPlaceholder())
 	}
 }
 
@@ -1750,6 +1821,9 @@ func (m providerTUIModel) viewCustomProviderForm(s *strings.Builder) {
 				s.WriteString("    " + m.cpURLInput.View() + "\n")
 			case cpStepAPIKey:
 				s.WriteString("    " + m.apiKeyInput.View() + "\n")
+				if m.apiKeyMasked && m.apiKeyOriginal != "" {
+					s.WriteString(tuiDimStyle.Render("    "+savedSecretReplaceHint(m.apiKeyOriginal)) + "\n")
+				}
 			case cpStepAuthHeader:
 				s.WriteString("    " + m.cpAuthInput.View() + "\n")
 			}
@@ -1827,6 +1901,9 @@ func (m providerTUIModel) viewManualTab(s *strings.Builder) {
 				s.WriteString("    " + m.manualModelInput.View() + "\n")
 			case manualStepAuthToken:
 				s.WriteString("    " + m.manualTokenInput.View() + "\n")
+				if m.manualTokenMasked && m.manualTokenOriginal != "" {
+					s.WriteString(tuiDimStyle.Render("    "+savedSecretReplaceHint(m.manualTokenOriginal)) + "\n")
+				}
 			case manualStepAuthHeader:
 				s.WriteString("    " + m.manualAuthHeaderInput.View() + "\n")
 			}
@@ -1910,6 +1987,16 @@ func (m providerTUIModel) viewAPIKey(s *strings.Builder) {
 	s.WriteString("  " + m.apiKeyInput.View())
 	s.WriteString("\n")
 
+	// When an API key is already saved, the input starts masked. Surface a
+	// hint so the user knows typing or pasting will replace the saved key,
+	// and show a short prefix fingerprint so they can sanity-check which key
+	// is currently saved without exposing it.
+	if m.apiKeyMasked && m.apiKeyOriginal != "" {
+		s.WriteString("\n")
+		s.WriteString(tuiDimStyle.Render(savedSecretReplaceHintLine(m.apiKeyOriginal)))
+		s.WriteString("\n")
+	}
+
 	if m.activeTab == tabOfficial {
 		provider := m.currentProvider()
 		if envKey := os.Getenv(provider.EnvVar); envKey != "" {
@@ -1926,6 +2013,48 @@ func (m providerTUIModel) viewAPIKey(s *strings.Builder) {
 	s.WriteString("\n")
 	s.WriteString(tuiHelpStyle.Render("  Enter Confirm  Esc Back"))
 	s.WriteString("\n")
+}
+
+// savedSecretFingerprintMinHiddenLen is the minimum number of runes that must
+// sit between the visible prefix and suffix so the fingerprint does not expose
+// the entire key (e.g. a 10-rune key with prefix 6 + suffix 4).
+const savedSecretFingerprintMinHiddenLen = 5
+
+// savedSecretFingerprintMinLen is the minimum trimmed secret length required
+// before a fingerprint is shown. Shorter keys hide the parenthetical hint.
+const savedSecretFingerprintMinLen = savedSecretFingerprintPrefixLen + savedSecretFingerprintSuffixLen + savedSecretFingerprintMinHiddenLen
+
+// savedSecretFingerprintPrefixLen is how many leading runes to show.
+const savedSecretFingerprintPrefixLen = 6
+
+// savedSecretFingerprintSuffixLen is how many trailing runes to show.
+const savedSecretFingerprintSuffixLen = 4
+
+// savedSecretFingerprint returns a short fingerprint for display, e.g.
+// "sk-a1b2...wxyz" (first 6 + "..." + last 4). Returns "" when the trimmed
+// secret is shorter than savedSecretFingerprintMinLen runes.
+func savedSecretFingerprint(s string) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) < savedSecretFingerprintMinLen {
+		return ""
+	}
+	prefix := string(runes[:savedSecretFingerprintPrefixLen])
+	suffix := string(runes[len(runes)-savedSecretFingerprintSuffixLen:])
+	return prefix + "..." + suffix
+}
+
+// savedSecretReplaceHint builds the replace hint text without leading indent.
+func savedSecretReplaceHint(original string) string {
+	hint := "Type or paste to replace the saved key."
+	if fp := savedSecretFingerprint(original); fp != "" {
+		hint += fmt.Sprintf("  (saved: %s)", fp)
+	}
+	return hint
+}
+
+func savedSecretReplaceHintLine(original string) string {
+	return "  " + savedSecretReplaceHint(original)
 }
 
 // --- Styles ---

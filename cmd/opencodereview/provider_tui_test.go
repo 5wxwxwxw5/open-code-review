@@ -1112,6 +1112,104 @@ func TestProviderTUI_CustomModelInput_RejectsDuplicate(t *testing.T) {
 	}
 }
 
+func TestProviderTUI_OfficialTab_CustomModelInput_PersistsName(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {
+				Model:  "qwen3.7-max",
+				Models: []string{"qwen3.7-max"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabOfficial
+
+	// Land the cursor on the official provider we configured.
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepModel
+	m.modelIdx = len(m.models()) // "Enter custom model name..."
+	m.customModel = true
+	m.modelInput.SetValue("my-custom-model")
+	m.modelInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+
+	if m2.customModel {
+		t.Error("customModel should be cleared after Enter")
+	}
+	if m2.formError != "" {
+		t.Errorf("formError = %q, want empty", m2.formError)
+	}
+	if !m2.savedInSession {
+		t.Error("savedInSession should be true after successful add")
+	}
+	got := m2.existingCfg.Providers["dashscope"].Models
+	want := []string{"qwen3.7-max", "my-custom-model"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("official Models = %v, want %v", got, want)
+	}
+
+	diskCfg, err := loadOrCreateConfig(configPath)
+	if err != nil {
+		t.Fatalf("load disk config: %v", err)
+	}
+	diskModels := diskCfg.Providers["dashscope"].Models
+	if len(diskModels) != 2 || diskModels[1] != "my-custom-model" {
+		t.Errorf("disk Models = %v, want [qwen3.7-max my-custom-model]", diskModels)
+	}
+}
+
+func TestProviderTUI_OfficialTab_CustomModelInput_RejectsDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {
+				Model:  "qwen3.7-max",
+				Models: []string{"qwen3.7-max"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg, configPath)
+	m.activeTab = tabOfficial
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepModel
+	m.modelIdx = len(m.models())
+	m.customModel = true
+	m.modelInput.SetValue("qwen3.7-max")
+	m.modelInput.Focus()
+
+	result, _ := m.Update(enterKey())
+	m2 := result.(providerTUIModel)
+
+	if !m2.customModel {
+		t.Error("customModel should stay true after duplicate reject")
+	}
+	if m2.formError != "Already in list: qwen3.7-max" {
+		t.Errorf("formError = %q, want %q", m2.formError, "Already in list: qwen3.7-max")
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		t.Errorf("disk file should not exist; duplicate did not persist")
+	}
+}
+
 func TestProviderTUI_ManualFormPassesKToAuthHeaderInput(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
@@ -1165,6 +1263,242 @@ func TestProviderTUI_CustomFormPassesKToAuthHeaderInput(t *testing.T) {
 	if got := m4.cpAuthInput.Value(); got != "key" {
 		t.Errorf("cpAuthInput.Value() = %q, want %q", got, "key")
 	}
+}
+
+func TestProviderTUI_ViewAPIKey_MaskedShowsReplaceHintAndLastFour(t *testing.T) {
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {APIKey: "sk-secret-1234567890abcd"},
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabOfficial
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+	m.apiKeyInput.Focus()
+
+	if !m.apiKeyMasked {
+		t.Fatal("apiKeyMasked should be true when an existing key is loaded")
+	}
+
+	got := stripANSI(m.View().Content)
+	if !strings.Contains(got, "Type or paste to replace the saved key") {
+		t.Errorf("view missing replace hint; got:\n%s", got)
+	}
+	if !strings.Contains(got, "(saved: sk-sec...abcd)") {
+		t.Errorf("view missing prefix+suffix fingerprint; got:\n%s", got)
+	}
+}
+
+func TestProviderTUI_ViewAPIKey_ShortKeyOmitsFingerprint(t *testing.T) {
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {APIKey: "12345678901234"}, // 14 runes — below min length 15
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabOfficial
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+	m.apiKeyInput.Focus()
+
+	got := stripANSI(m.View().Content)
+	if !strings.Contains(got, "Type or paste to replace the saved key") {
+		t.Errorf("view missing replace hint; got:\n%s", got)
+	}
+	if strings.Contains(got, "(saved:") {
+		t.Errorf("view should omit fingerprint for keys shorter than 15 runes; got:\n%s", got)
+	}
+}
+
+func TestProviderTUI_ViewAPIKey_MinLenKeyShowsFingerprint(t *testing.T) {
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {APIKey: "123456789012345"}, // 15 runes — at min length
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabOfficial
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+	m.apiKeyInput.Focus()
+
+	got := stripANSI(m.View().Content)
+	if !strings.Contains(got, "(saved: 123456...2345)") {
+		t.Errorf("view should show fingerprint at min length 15; got:\n%s", got)
+	}
+}
+
+func TestSavedSecretFingerprint_TrimsLeadingWhitespace(t *testing.T) {
+	const key = "sk-secret-1234567890abcd"
+	got := savedSecretFingerprint("  " + key)
+	want := "sk-sec...abcd"
+	if got != want {
+		t.Errorf("savedSecretFingerprint(%q) = %q, want %q", "  "+key, got, want)
+	}
+}
+
+func TestProviderTUI_ViewAPIKey_FreshHidesReplaceHint(t *testing.T) {
+	cfg := &Config{
+		Provider: "dashscope",
+		Model:    "qwen3.7-max",
+		Providers: map[string]ProviderEntry{
+			"dashscope": {},
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabOfficial
+	for i, p := range m.providers {
+		if p.Name == "dashscope" {
+			m.officialIdx = i
+			break
+		}
+	}
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+
+	if m.apiKeyMasked {
+		t.Fatal("apiKeyMasked should be false when no key is loaded")
+	}
+
+	got := stripANSI(m.View().Content)
+	if strings.Contains(got, "Type or paste to replace the saved key") {
+		t.Errorf("view should not show replace hint when fresh; got:\n%s", got)
+	}
+}
+
+func TestProviderTUI_ApiKeyPasteReplacesMaskedKey(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		Model:    "step-3.5-flash",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {
+				URL:    "https://api.stepfun.com/v1",
+				APIKey: "old-key-ssss",
+				Model:  "step-3.5-flash",
+				Models: []string{"step-3.5-flash"},
+			},
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+	m.apiKeyInput.Focus()
+
+	if !m.apiKeyMasked {
+		t.Fatal("expected masked key on load")
+	}
+	if m.apiKeyInput.Value() != maskedSecretPlaceholder() {
+		t.Fatalf("placeholder = %q, want fixed %d asterisks", m.apiKeyInput.Value(), maskedSecretDisplayLen)
+	}
+
+	result, _ := m.Update(tea.PasteMsg{Content: "sk-new-pasted-key"})
+	m2 := result.(providerTUIModel)
+
+	if m2.apiKeyMasked {
+		t.Fatal("paste should unmask the field")
+	}
+	if got := m2.apiKeyInput.Value(); got != "sk-new-pasted-key" {
+		t.Errorf("input value = %q, want pasted key", got)
+	}
+	if r := m2.result(); r.apiKey != "sk-new-pasted-key" {
+		t.Errorf("result().apiKey = %q, want pasted key", r.apiKey)
+	}
+}
+
+func TestProviderTUI_ApiKeyTypingShowsOneStarPerChar(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		Model:    "step-3.5-flash",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {APIKey: "old-key-ssss", Model: "step-3.5-flash"},
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+	m.apiKeyInput.Focus()
+
+	for _, ch := range []rune("abc") {
+		result, _ := m.Update(charKey(ch))
+		m = result.(providerTUIModel)
+	}
+	if m.apiKeyInput.Value() != "abc" {
+		t.Errorf("value = %q, want abc", m.apiKeyInput.Value())
+	}
+	// EchoPassword renders one '*' per character in the input view.
+	masked := stripANSI(m.apiKeyInput.View())
+	starCount := strings.Count(masked, "*")
+	if starCount != 3 {
+		t.Errorf("masked view has %d asterisks, want 3 (one * per char)", starCount)
+	}
+}
+
+func TestProviderTUI_ApiKeyEnterWithoutEditKeepsOriginal(t *testing.T) {
+	cfg := &Config{
+		Provider: "stepfun",
+		CustomProviders: map[string]ProviderEntry{
+			"stepfun": {APIKey: "keep-me"},
+		},
+	}
+	m := newProviderTUI(cfg, "")
+	m.activeTab = tabCustom
+	m.customIdx = 0
+	m.step = stepAPIKey
+	m.loadExistingAPIKey()
+
+	if r := m.result(); r.apiKey != "keep-me" {
+		t.Fatalf("before edit result().apiKey = %q", r.apiKey)
+	}
+}
+
+// stripANSI removes ANSI escape sequences from a string so tests can assert
+// against plain text content.
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if r == 0x1b {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if r == 'm' {
+				inEscape = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func TestProviderTUI_DeleteModelPreservesActiveModel(t *testing.T) {
